@@ -1,6 +1,6 @@
 import React from 'react';
 import { LOGO_URL, PROFILE_AVATAR_URL } from '../data/initialData';
-import { Agent } from '../types';
+import { Agent, UserProfile } from '../types';
 
 interface SidebarProps {
   currentTab: string;
@@ -11,6 +11,8 @@ interface SidebarProps {
   onToggleRole: () => void;
   currentAgent?: Agent;
   unreadCount?: number;
+  profile?: UserProfile | null;
+  onSignOut?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -20,7 +22,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCloseMobile,
   userRole,
   onToggleRole,
-  currentAgent
+  currentAgent,
+  profile,
+  onSignOut
 }) => {
   const adminNavItems = [
     { id: 'dashboard', label: 'Dashboard', icon: 'grid_view' },
@@ -95,37 +99,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
 
-        {/* Role Switcher Pill */}
-        <div className="px-4 pt-3 pb-1">
-          <div className="p-1 rounded-xl bg-slate-100/90 border border-slate-200/60 flex items-center gap-1">
-            <button
-              onClick={() => {
-                if (userRole !== 'admin') onToggleRole();
-              }}
-              className={`flex-1 py-1 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all ${
-                userRole === 'admin'
-                  ? 'bg-white text-indigo-600 shadow-sm'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <span className="material-symbols-outlined text-[14px]">shield_person</span>
-              Admin
-            </button>
-            <button
-              onClick={() => {
-                if (userRole !== 'agent') onToggleRole();
-              }}
-              className={`flex-1 py-1 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all ${
-                userRole === 'agent'
-                  ? 'bg-white text-purple-600 shadow-sm'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <span className="material-symbols-outlined text-[14px]">school</span>
-              Agent View
-            </button>
+        {/* Role Switcher Pill: Only accessible for Primary Admin */}
+        {profile?.role === 'admin' && (
+          <div className="px-4 pt-3 pb-1">
+            <div className="p-1 rounded-xl bg-slate-100/90 border border-slate-200/60 flex items-center gap-1">
+              <button
+                onClick={() => {
+                  if (userRole !== 'admin') onToggleRole();
+                }}
+                className={`flex-1 py-1 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all ${
+                  userRole === 'admin'
+                    ? 'bg-white text-indigo-600 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[14px]">shield_person</span>
+                Admin
+              </button>
+              <button
+                onClick={() => {
+                  if (userRole !== 'agent') onToggleRole();
+                }}
+                className={`flex-1 py-1 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all ${
+                  userRole === 'agent'
+                    ? 'bg-white text-purple-600 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[14px]">school</span>
+                Agent View
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Main Navigation Links */}
         <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1 no-scrollbar">
@@ -190,11 +196,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* User Card at Bottom */}
         <div className="p-3.5 m-3 rounded-2xl bg-gradient-to-br from-slate-50 to-indigo-50/50 border border-slate-200/60 flex items-center justify-between">
           <div className="flex items-center gap-2.5 min-w-0">
-            {userRole === 'admin' ? (
+            {profile?.role === 'admin' ? (
               <div className="relative flex-shrink-0">
                 <img
                   src={PROFILE_AVATAR_URL}
-                  alt="Jyoti"
+                  alt="User"
                   className="w-9 h-9 rounded-full object-cover ring-2 ring-indigo-500/30 shadow-xs"
                 />
                 <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 rounded-full ring-2 ring-white" />
@@ -205,28 +211,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   currentAgent?.colorClass || 'bg-purple-600 text-white'
                 }`}
               >
-                {currentAgent?.initial || 'A'}
+                {(profile?.fullName || currentAgent?.name || 'A').charAt(0).toUpperCase()}
               </div>
             )}
             <div className="min-w-0">
               <p className="font-semibold text-xs text-slate-800 truncate">
-                {userRole === 'admin' ? 'Jyoti (QA Lead)' : currentAgent?.name || 'Agent'}
+                {profile?.fullName || (userRole === 'admin' ? 'Jyoti (Admin)' : currentAgent?.name || 'Agent')}
               </p>
               <p className="text-[11px] text-slate-500 truncate">
-                {userRole === 'admin' ? 'Global Administrator' : currentAgent?.role || 'Agent'}
+                {profile?.role === 'admin' ? 'Primary Admin' : 'Authorized Agent'}
               </p>
             </div>
           </div>
 
-          {userRole === 'admin' && (
-            <button
-              onClick={() => handleItemClick('settings')}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-white transition-colors cursor-pointer"
-              title="Settings"
-            >
-              <span className="material-symbols-outlined text-[18px]">tune</span>
-            </button>
-          )}
+          <div className="flex items-center gap-1">
+            {userRole === 'admin' && (
+              <button
+                onClick={() => handleItemClick('settings')}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-white transition-colors cursor-pointer"
+                title="Settings"
+              >
+                <span className="material-symbols-outlined text-[18px]">tune</span>
+              </button>
+            )}
+            {onSignOut && (
+              <button
+                onClick={onSignOut}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                title="Sign Out"
+              >
+                <span className="material-symbols-outlined text-[18px]">logout</span>
+              </button>
+            )}
+          </div>
         </div>
       </aside>
     </>

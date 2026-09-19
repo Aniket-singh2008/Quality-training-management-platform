@@ -1,6 +1,6 @@
 import React from 'react';
 import { PROFILE_AVATAR_URL } from '../data/initialData';
-import { Agent } from '../types';
+import { Agent, UserProfile } from '../types';
 import { SupabaseHealthStatus } from '../services/supabaseService';
 
 interface HeaderProps {
@@ -19,6 +19,8 @@ interface HeaderProps {
   onSelectCurrentAgent?: (agentId: string) => void;
   supabaseStatus?: SupabaseHealthStatus | null;
   onOpenSupabaseModal?: () => void;
+  profile?: UserProfile | null;
+  onSignOut?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -36,7 +38,9 @@ export const Header: React.FC<HeaderProps> = ({
   currentAgentId,
   onSelectCurrentAgent,
   supabaseStatus,
-  onOpenSupabaseModal
+  onOpenSupabaseModal,
+  profile,
+  onSignOut
 }) => {
   const currentAgent = agents.find((a) => a.id === currentAgentId) || agents[0];
 
@@ -156,33 +160,35 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         )}
 
-        {/* Role Toggle Pill in Header for fast testing */}
-        <div className="hidden sm:flex items-center p-0.5 rounded-full bg-slate-100 border border-slate-200/80">
-          <button
-            onClick={() => {
-              if (userRole !== 'admin') onToggleRole();
-            }}
-            className={`px-2.5 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
-              userRole === 'admin'
-                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            Admin
-          </button>
-          <button
-            onClick={() => {
-              if (userRole !== 'agent') onToggleRole();
-            }}
-            className={`px-2.5 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
-              userRole === 'agent'
-                ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-xs'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            Agent
-          </button>
-        </div>
+        {/* Role Toggle: Visible ONLY for Primary Admin to preview Agent experience */}
+        {profile?.role === 'admin' && (
+          <div className="hidden sm:flex items-center p-0.5 rounded-full bg-slate-100 border border-slate-200/80">
+            <button
+              onClick={() => {
+                if (userRole !== 'admin') onToggleRole();
+              }}
+              className={`px-2.5 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                userRole === 'admin'
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Admin View
+            </button>
+            <button
+              onClick={() => {
+                if (userRole !== 'agent') onToggleRole();
+              }}
+              className={`px-2.5 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                userRole === 'agent'
+                  ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Agent View
+            </button>
+          </div>
+        )}
 
         {/* Notification Bell with Badge */}
         <button
@@ -203,8 +209,9 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={onOpenProfile}
           className="flex items-center gap-2 p-1 pl-1.5 rounded-full hover:bg-slate-100 transition-all cursor-pointer border border-transparent hover:border-slate-200"
+          title="Account Profile & Details"
         >
-          {userRole === 'admin' ? (
+          {profile?.role === 'admin' ? (
             <img
               src={PROFILE_AVATAR_URL}
               alt="User"
@@ -216,18 +223,30 @@ export const Header: React.FC<HeaderProps> = ({
                 currentAgent?.colorClass || 'bg-purple-600 text-white'
               }`}
             >
-              {currentAgent?.initial || 'A'}
+              {(profile?.fullName || currentAgent?.name || 'A').charAt(0).toUpperCase()}
             </div>
           )}
           <div className="hidden lg:block text-left pr-1">
             <p className="text-xs font-bold text-slate-800 leading-tight">
-              {userRole === 'admin' ? 'Jyoti' : currentAgent?.name?.split(' ')[0] || 'Agent'}
+              {profile?.fullName || (userRole === 'admin' ? 'Jyoti (Admin)' : currentAgent?.name?.split(' ')[0] || 'Agent')}
             </p>
             <p className="text-[10px] text-indigo-600 font-semibold leading-tight">
-              {userRole === 'admin' ? 'QA Admin' : 'Agent'}
+              {profile?.role === 'admin' ? 'Primary Admin' : 'Agent'}
             </p>
           </div>
         </button>
+
+        {/* Quick Sign Out Action */}
+        {onSignOut && (
+          <button
+            onClick={onSignOut}
+            className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer border border-transparent hover:border-rose-200"
+            title="Sign out of ProcessHub"
+          >
+            <span className="material-symbols-outlined text-[16px]">logout</span>
+            <span className="hidden md:inline">Sign Out</span>
+          </button>
+        )}
       </div>
     </header>
   );

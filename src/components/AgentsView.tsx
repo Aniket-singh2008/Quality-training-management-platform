@@ -10,6 +10,7 @@ interface AgentsViewProps {
     agentId: string,
     updates: { qualityScore: number; fatalCount: number; callAuditCount: number }
   ) => void;
+  onToggleAgentStatus?: (agentId: string, newStatus: 'Active' | 'Inactive') => void;
 }
 
 export const AgentsView: React.FC<AgentsViewProps> = ({
@@ -17,7 +18,8 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
   onRemindAgent,
   onOpenAddAgent,
   onOpenImportPerformance,
-  onUpdateAgentPerformance
+  onUpdateAgentPerformance,
+  onToggleAgentStatus
 }) => {
   const [selectedTeam, setSelectedTeam] = useState<string>('All');
   const [search, setSearch] = useState<string>('');
@@ -27,6 +29,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
   const [formQualityScore, setFormQualityScore] = useState<number>(90);
   const [formFatalCount, setFormFatalCount] = useState<number>(0);
   const [formCallAuditCount, setFormCallAuditCount] = useState<number>(30);
+  const [formStatus, setFormStatus] = useState<'Active' | 'Inactive'>('Active');
 
   const teams = ['All', 'Escalations Squad', 'Customer Success', 'Billing Ops', 'Tier 1 Support'];
 
@@ -35,6 +38,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
     setFormQualityScore(agent.qualityScore ?? agent.score ?? 90);
     setFormFatalCount(agent.fatalCount ?? 0);
     setFormCallAuditCount(agent.callAuditCount ?? 30);
+    setFormStatus(agent.status === 'Inactive' ? 'Inactive' : 'Active');
   };
 
   const handleSaveEdit = (e: React.FormEvent) => {
@@ -46,6 +50,10 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
       fatalCount: Number(formFatalCount),
       callAuditCount: Number(formCallAuditCount)
     });
+
+    if (onToggleAgentStatus && formStatus !== editingAgent.status) {
+      onToggleAgentStatus(editingAgent.id, formStatus);
+    }
 
     setEditingAgent(null);
   };
@@ -220,9 +228,35 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                     </div>
                   </div>
 
-                  <span className="text-[11px] font-black px-2.5 py-1 rounded-xl bg-indigo-50 text-indigo-700 border border-indigo-100">
-                    #{agent.rank}
-                  </span>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <span className="text-[11px] font-black px-2.5 py-1 rounded-xl bg-indigo-50 text-indigo-700 border border-indigo-100">
+                      #{agent.rank}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (onToggleAgentStatus) {
+                          onToggleAgentStatus(
+                            agent.id,
+                            agent.status === 'Active' ? 'Inactive' : 'Active'
+                          );
+                        }
+                      }}
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full border cursor-pointer transition-all flex items-center gap-1 ${
+                        agent.status === 'Active'
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200/80 hover:bg-emerald-100'
+                          : 'bg-rose-50 text-rose-700 border-rose-200/80 hover:bg-rose-100'
+                      }`}
+                      title={`Click to ${agent.status === 'Active' ? 'deactivate' : 'activate'} this agent account`}
+                    >
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          agent.status === 'Active' ? 'bg-emerald-500' : 'bg-rose-500'
+                        }`}
+                      />
+                      <span>{agent.status === 'Active' ? 'Active' : 'Deactivated'}</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* 3 Core Calibrated Metrics Row */}
@@ -383,6 +417,42 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                 />
                 <p className="text-[11px] text-slate-400 mt-1">
                   Total phone and interaction audits conducted this cycle
+                </p>
+              </div>
+
+              {/* 4. Account Authorization Status */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Account Login &amp; Authorization
+                </label>
+                <div className="flex rounded-xl bg-slate-100 p-1 border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setFormStatus('Active')}
+                    className={`flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      formStatus === 'Active'
+                        ? 'bg-white text-emerald-700 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span>Active (Authorized)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormStatus('Inactive')}
+                    className={`flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      formStatus === 'Inactive'
+                        ? 'bg-white text-rose-700 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-rose-500" />
+                    <span>Deactivated</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Deactivated agents cannot log into ProcessHub or view protected SOP materials.
                 </p>
               </div>
 

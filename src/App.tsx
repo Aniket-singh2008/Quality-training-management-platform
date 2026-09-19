@@ -18,16 +18,25 @@ import { ProfileModal } from './components/ProfileModal';
 import { ImportPerformanceModal } from './components/ImportPerformanceModal';
 import { SupabaseStatusModal } from './components/SupabaseStatusModal';
 import { applyPerformanceImport } from './utils/pdfPerformanceService';
+import { LoginView } from './components/LoginView';
+import { supabase } from './lib/supabase';
 import {
   checkSupabaseHealth,
   fetchProcessesFromSupabase,
   fetchAgentsFromSupabase,
   fetchSubmissionsFromSupabase,
+  fetchNotificationsFromSupabase,
+  broadcastProcessPublishNotification,
+  markNotificationReadInSupabase,
+  markAllNotificationsReadInSupabase,
   saveProcessUpdate,
   deleteProcessFromSupabase,
   saveAgent,
   saveSubmissionToSupabase,
   seedInitialDataIfEmpty,
+  getCurrentSessionAndProfile,
+  signOutUser,
+  toggleAgentActiveStatus,
   SupabaseHealthStatus
 } from './services/supabaseService';
 import {
@@ -45,10 +54,13 @@ import {
   NotificationItem,
   Submission,
   SystemSettings,
-  PerformanceImportRow
+  PerformanceImportRow,
+  UserProfile
 } from './types';
 
 export default function App() {
+  const [currentProfile, setCurrentProfile] = useState<UserProfile | null>(null);
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [userRole, setUserRole] = useState<'admin' | 'agent'>('admin');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -116,6 +128,12 @@ export default function App() {
         if (fetchedSubs && fetchedSubs.length > 0) {
           setSubmissions(fetchedSubs);
         }
+
+        // Fetch notifications for agents and admins
+        const fetchedNotifs = await fetchNotificationsFromSupabase();
+        if (fetchedNotifs && fetchedNotifs.length > 0) {
+          setNotifications(fetchedNotifs);
+        }
       }
     } catch (err) {
       console.error('Supabase synchronization error:', err);
@@ -124,12 +142,125 @@ export default function App() {
     }
   }, []);
 
+  // Supabase Auth & Session Verification Lifecycle
   useEffect(() => {
-    loadDataFromSupabase();
-  }, [loadDataFromSupabase]);
+    let isMounted = true;
 
-  // Switch role between Admin and Agent
+    async function initSession() {
+      try {
+        const { profile } = await getCurrentSessionAndProfile();
+        if (isMounted) {
+          if (profile) {
+            // Check if deactivated
+            if (profile.isActive === false) {
+              await signOutUser();
+              setCurrentProfile(null);
+              showToast('Your agent account is deactivated. Please contact your QA Lead.', 'info');
+              return;
+            }
+
+            setCurrentProfile(profile);
+            setUserRole(profile.role);
+            if (profile.role === 'agent') {
+              setCurrentTab('dashboard');
+              setAgents((currAgents) => {
+                const matched = currAgents.find(
+                  (a) => a.id === profile.id || a.email.toLowerCase() === profile.email.toLowerCase()
+                );
+                if (matched) {
+                  setCurrentAgentId(matched.id);
+                }
+                return currAgents;
+              });
+            }
+          } else {
+            setCurrentProfile(null);
+          }
+        }
+      } catch (err) {
+        console.warn('Auth session initial check error:', err);
+      } finally {
+        if (isMounted) {
+          setIsAuthChecking(false);
+        }
+      }
+    }
+
+    initSession();
+
+    // Clean up Supabase auth hash/query if returning from confirmation link
+    if (
+      typeof window !== 'undefined' &&
+      (window.location.hash.includes('access_token') || window.location.search.includes('code='))
+    ) {
+      setTimeout(() => {
+        try {
+          window.history.replaceState(null, '', window.location.pathname);
+        } catch {
+          // ignore
+        }
+      }, 1000);
+    }
+
+    // Subscribe to auth state updates
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event) => {
+      if (!isMounted) return;
+
+      if (event === 'SIGNED_OUT') {
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('processhub_cached_profile');
+        }
+        setCurrentProfile(null);
+      } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+        const { profile } = await getCurrentSessionAndProfile();
+        if (profile && isMounted) {
+          if (profile.isActive === false) {
+            await signOutUser();
+            setCurrentProfile(null);
+            showToast('Account deactivated. Contact QA Lead.', 'info');
+            return;
+          }
+
+          setCurrentProfile(profile);
+          setUserRole(profile.role);
+          if (profile.role === 'agent') {
+            setCurrentTab('dashboard');
+          }
+        }
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      authListener?.subscription?.unsubscribe();
+    };
+  }, []);
+
+  // Load database entities when authenticated
+  useEffect(() => {
+    if (currentProfile) {
+      loadDataFromSupabase();
+    }
+  }, [currentProfile, loadDataFromSupabase]);
+
+  // Enforce role guard: agents cannot access admin tabs
+  useEffect(() => {
+    if (currentProfile?.role === 'agent') {
+      const adminOnlyTabs = ['new-audit', 'agents', 'analytics', 'settings'];
+      if (adminOnlyTabs.includes(currentTab)) {
+        setCurrentTab('dashboard');
+        showToast('Access restricted: Only QA Administrators can access management views.', 'info');
+      }
+    }
+  }, [currentProfile, currentTab]);
+
+  // Switch role between Admin and Agent (Permitted only for Primary Admin to preview Agent View)
   const handleToggleRole = () => {
+    if (currentProfile?.role !== 'admin') {
+      showToast('Access Denied: Only users with the Primary Admin role in Supabase profiles can access Admin Dashboard.', 'info');
+      return;
+    }
+
     const nextRole = userRole === 'admin' ? 'agent' : 'admin';
     setUserRole(nextRole);
     if (nextRole === 'agent') {
@@ -139,6 +270,30 @@ export default function App() {
       `Switched to ${nextRole === 'admin' ? 'Admin Dashboard' : `Agent View (${currentAgent.name})`}`,
       'info'
     );
+  };
+
+  // Sign out user
+  const handleSignOut = async () => {
+    await signOutUser();
+    setCurrentProfile(null);
+    setUserRole('admin');
+    setCurrentTab('dashboard');
+    showToast('Signed out of ProcessHub.');
+  };
+
+  // Admin toggling an agent's active status
+  const handleToggleAgentStatus = async (agentId: string, newStatus: 'Active' | 'Inactive') => {
+    const isActive = newStatus === 'Active';
+    setAgents((prev) =>
+      prev.map((a) => (a.id === agentId ? { ...a, status: newStatus } : a))
+    );
+
+    const ok = await toggleAgentActiveStatus(agentId, isActive);
+    if (ok) {
+      showToast(`Agent account set to ${newStatus} in Supabase profiles.`);
+    } else {
+      showToast(`Agent account updated locally to ${newStatus}.`, 'info');
+    }
   };
 
   const handleTabChange = (tab: string) => {
@@ -223,6 +378,12 @@ export default function App() {
     } else {
       showToast(`SOP Published to ${publishedProc.metrics?.totalAssigned} agents!`);
     }
+
+    // Broadcast notifications to agents in Supabase
+    broadcastProcessPublishNotification(
+      publishedProc,
+      publishedProc.audience.type === 'selected' ? publishedProc.audience.assignedAgents : undefined
+    );
     setCurrentTab('updates');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -431,6 +592,33 @@ export default function App() {
     submissions.filter((s) => s.agentId === currentAgent.id).map((s) => s.processId)
   );
 
+  // AUTH GUARD: Display spinner while verifying existing Supabase session
+  if (isAuthChecking) {
+    return (
+      <div className="min-h-screen w-full bg-slate-950 flex flex-col items-center justify-center p-6 text-white selection:bg-indigo-500">
+        <div className="w-12 h-12 border-3 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin mb-4" />
+        <h2 className="text-base font-bold text-white tracking-tight">ProcessHub QA</h2>
+        <p className="text-xs text-slate-400 mt-1">Verifying Supabase authentication &amp; role credentials...</p>
+      </div>
+    );
+  }
+
+  // AUTH GUARD: Render Login / Primary Admin Registration if not logged in
+  if (!currentProfile) {
+    return (
+      <LoginView
+        onLoginSuccess={(profile) => {
+          setCurrentProfile(profile);
+          setUserRole(profile.role);
+          loadDataFromSupabase();
+          showToast(
+            `Authenticated as ${profile.fullName} (${profile.role === 'admin' ? 'Primary Admin' : 'Agent'})`
+          );
+        }}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50/60 font-sans text-slate-800 flex flex-col antialiased selection:bg-indigo-500 selection:text-white">
       {/* Sidebar Navigation */}
@@ -443,6 +631,8 @@ export default function App() {
         onToggleRole={handleToggleRole}
         currentAgent={currentAgent}
         unreadCount={unreadCount}
+        profile={currentProfile}
+        onSignOut={handleSignOut}
       />
 
       {/* Main Layout Area */}
@@ -478,6 +668,8 @@ export default function App() {
           }}
           supabaseStatus={supabaseStatus}
           onOpenSupabaseModal={() => setIsSupabaseModalOpen(true)}
+          profile={currentProfile}
+          onSignOut={handleSignOut}
         />
 
         {/* Content Container */}
@@ -591,6 +783,7 @@ export default function App() {
               onRemindAgent={handleRemindAgent}
               onOpenAddAgent={() => setIsAddAgentOpen(true)}
               onOpenImportPerformance={() => setIsImportModalOpen(true)}
+              onToggleAgentStatus={handleToggleAgentStatus}
             />
           )}
 
@@ -670,11 +863,16 @@ export default function App() {
         <NotificationsModal
           notifications={notifications}
           onClose={() => setIsNotificationsOpen(false)}
-          onMarkAllRead={() => {
-            setNotifications(notifications.map((n) => ({ ...n, read: true })));
+          onMarkAllRead={async () => {
+            setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+            await markAllNotificationsReadInSupabase(currentProfile?.id);
             showToast('All notifications marked as read');
           }}
-          onActionClick={(item) => {
+          onActionClick={async (item) => {
+            setNotifications((prev) =>
+              prev.map((n) => (n.id === item.id ? { ...n, read: true } : n))
+            );
+            await markNotificationReadInSupabase(item.id);
             showToast(item.message, 'info');
             setIsNotificationsOpen(false);
           }}
@@ -682,7 +880,16 @@ export default function App() {
       )}
 
       {/* Profile Modal */}
-      {isProfileOpen && <ProfileModal onClose={() => setIsProfileOpen(false)} />}
+      {isProfileOpen && (
+        <ProfileModal
+          profile={currentProfile}
+          onClose={() => setIsProfileOpen(false)}
+          onSignOut={() => {
+            setIsProfileOpen(false);
+            handleSignOut();
+          }}
+        />
+      )}
 
       {/* Supabase Database Connection & Setup Modal */}
       {isSupabaseModalOpen && (

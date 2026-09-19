@@ -1,3 +1,13 @@
+export interface UserProfile {
+  id: string;
+  email: string;
+  fullName: string;
+  role: 'admin' | 'agent';
+  isActive: boolean;
+  status?: string;
+  createdAt?: string;
+}
+
 export interface Option {
   id: string;
   text: string;
@@ -26,7 +36,7 @@ export interface Agent {
   pendingQuizzes: number;
   completedProcesses: number;
   rank: number;
-  status: 'Active' | 'On Leave';
+  status: 'Active' | 'On Leave' | 'Inactive';
   email: string;
   agentCode?: string; // e.g. 'AGT001'
 }
