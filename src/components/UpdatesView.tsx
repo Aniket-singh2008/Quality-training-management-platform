@@ -8,6 +8,7 @@ interface UpdatesViewProps {
   onSelectProcess: (process: AuditProcess) => void;
   onNewAudit: () => void;
   onOpenProcessDetail: (process: AuditProcess) => void;
+  onDeleteProcess?: (processId: string) => void;
 }
 
 export const UpdatesView: React.FC<UpdatesViewProps> = ({
@@ -16,7 +17,8 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({
   completedProcessIds = new Set(),
   onSelectProcess,
   onNewAudit,
-  onOpenProcessDetail
+  onOpenProcessDetail,
+  onDeleteProcess
 }) => {
   const [filter, setFilter] = useState<'All' | 'Published' | 'Draft'>('All');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
@@ -236,13 +238,28 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({
                 </button>
 
                 {userRole === 'admin' && (
-                  <button
-                    onClick={() => onSelectProcess(proc)}
-                    className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center justify-center gap-1 transition-all cursor-pointer"
-                    title="Edit Process Workflow"
-                  >
-                    <span className="material-symbols-outlined text-[16px]">edit</span>
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => onSelectProcess(proc)}
+                      className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center justify-center gap-1 transition-all cursor-pointer"
+                      title="Edit Process Workflow"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">edit</span>
+                    </button>
+                    {onDeleteProcess && (
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Are you sure you want to delete "${proc.title}" from Supabase?`)) {
+                            onDeleteProcess(proc.id);
+                          }
+                        }}
+                        className="py-2 px-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold flex items-center justify-center transition-all cursor-pointer border border-rose-200/60"
+                        title="Delete Process from Supabase"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">delete</span>
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             </div>

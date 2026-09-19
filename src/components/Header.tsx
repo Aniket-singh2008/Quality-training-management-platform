@@ -1,6 +1,7 @@
 import React from 'react';
 import { PROFILE_AVATAR_URL } from '../data/initialData';
 import { Agent } from '../types';
+import { SupabaseHealthStatus } from '../services/supabaseService';
 
 interface HeaderProps {
   currentTab: string;
@@ -16,6 +17,8 @@ interface HeaderProps {
   agents?: Agent[];
   currentAgentId?: string;
   onSelectCurrentAgent?: (agentId: string) => void;
+  supabaseStatus?: SupabaseHealthStatus | null;
+  onOpenSupabaseModal?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -31,7 +34,9 @@ export const Header: React.FC<HeaderProps> = ({
   onSearchClick,
   agents = [],
   currentAgentId,
-  onSelectCurrentAgent
+  onSelectCurrentAgent,
+  supabaseStatus,
+  onOpenSupabaseModal
 }) => {
   const currentAgent = agents.find((a) => a.id === currentAgentId) || agents[0];
 
@@ -107,6 +112,31 @@ export const Header: React.FC<HeaderProps> = ({
             ⌘K
           </kbd>
         </div>
+
+        {/* Supabase Connection Status Pill */}
+        {onOpenSupabaseModal && (
+          <button
+            onClick={onOpenSupabaseModal}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+              supabaseStatus?.tablesExist
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+            }`}
+            title="Supabase Database Status & Setup"
+          >
+            <span
+              className={`w-2 h-2 rounded-full ${
+                supabaseStatus?.tablesExist
+                  ? 'bg-emerald-500 animate-pulse'
+                  : 'bg-amber-500'
+              }`}
+            />
+            <span className="hidden md:inline">Supabase</span>
+            <span className="text-[10px] uppercase font-mono px-1 py-0.2 rounded bg-white/70">
+              {supabaseStatus?.tablesExist ? 'Live' : 'Setup'}
+            </span>
+          </button>
+        )}
 
         {/* If in Agent Mode: Agent Switcher Dropdown to test agent privacy */}
         {userRole === 'agent' && agents.length > 0 && onSelectCurrentAgent && (

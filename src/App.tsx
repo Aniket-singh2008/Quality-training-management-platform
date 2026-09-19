@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { DashboardView } from './components/DashboardView';
@@ -16,7 +16,20 @@ import { AddAgentModal } from './components/AddAgentModal';
 import { NotificationsModal } from './components/NotificationsModal';
 import { ProfileModal } from './components/ProfileModal';
 import { ImportPerformanceModal } from './components/ImportPerformanceModal';
+import { SupabaseStatusModal } from './components/SupabaseStatusModal';
 import { applyPerformanceImport } from './utils/pdfPerformanceService';
+import {
+  checkSupabaseHealth,
+  fetchProcessesFromSupabase,
+  fetchAgentsFromSupabase,
+  fetchSubmissionsFromSupabase,
+  saveProcessUpdate,
+  deleteProcessFromSupabase,
+  saveAgent,
+  saveSubmissionToSupabase,
+  seedInitialDataIfEmpty,
+  SupabaseHealthStatus
+} from './services/supabaseService';
 import {
   INITIAL_PROCESSES,
   INITIAL_AGENTS,
@@ -47,6 +60,12 @@ export default function App() {
   const [submissions, setSubmissions] = useState<Submission[]>(INITIAL_SUBMISSIONS);
   const [settings, setSettings] = useState<SystemSettings>(INITIAL_SETTINGS);
 
+  // Supabase connection & sync state
+  const [supabaseStatus, setSupabaseStatus] = useState<SupabaseHealthStatus | null>(null);
+  const [isSupabaseModalOpen, setIsSupabaseModalOpen] = useState(false);
+  const [isLoadingSupabase, setIsLoadingSupabase] = useState(false);
+  const [isBannerDismissed, setIsBannerDismissed] = useState(false);
+
   // Active logged-in agent for Agent View
   const [currentAgentId, setCurrentAgentId] = useState<string>('ag-1');
 
@@ -68,6 +87,46 @@ export default function App() {
       setToast(null);
     }, 3500);
   };
+
+  // Load data from Supabase backend
+  const loadDataFromSupabase = useCallback(async () => {
+    setIsLoadingSupabase(true);
+    try {
+      const health = await checkSupabaseHealth();
+      setSupabaseStatus(health);
+
+      if (health.tablesExist) {
+        // Auto-seed if tables exist but are empty
+        await seedInitialDataIfEmpty();
+
+        // Fetch processes (with questions)
+        const fetchedProcs = await fetchProcessesFromSupabase();
+        if (fetchedProcs && fetchedProcs.length > 0) {
+          setProcesses(fetchedProcs);
+        }
+
+        // Fetch agents
+        const fetchedAgents = await fetchAgentsFromSupabase();
+        if (fetchedAgents && fetchedAgents.length > 0) {
+          setAgents(fetchedAgents);
+        }
+
+        // Fetch submissions & scores
+        const fetchedSubs = await fetchSubmissionsFromSupabase();
+        if (fetchedSubs && fetchedSubs.length > 0) {
+          setSubmissions(fetchedSubs);
+        }
+      }
+    } catch (err) {
+      console.error('Supabase synchronization error:', err);
+    } finally {
+      setIsLoadingSupabase(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadDataFromSupabase();
+  }, [loadDataFromSupabase]);
 
   // Switch role between Admin and Agent
   const handleToggleRole = () => {
@@ -103,20 +162,28 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleSaveDraft = (proc: AuditProcess) => {
+  const handleSaveDraft = async (proc: AuditProcess) => {
+    const draftProc: AuditProcess = { ...proc, status: 'Draft', autoSavedText: 'Saved just now' };
     setProcesses((prev) => {
       const idx = prev.findIndex((p) => p.id === proc.id);
       if (idx >= 0) {
         const updated = [...prev];
-        updated[idx] = { ...proc, status: 'Draft', autoSavedText: 'Saved just now' };
+        updated[idx] = draftProc;
         return updated;
       }
-      return [proc, ...prev];
+      return [draftProc, ...prev];
     });
-    showToast(`Draft "${proc.title}" saved successfully!`);
+
+    showToast(`Saving draft "${proc.title}" to Supabase...`, 'info');
+    const ok = await saveProcessUpdate(draftProc);
+    if (ok) {
+      showToast(`Draft "${proc.title}" saved to Supabase!`);
+    } else {
+      showToast(`Draft saved locally (check Supabase table status)`);
+    }
   };
 
-  const handlePublish = (proc: AuditProcess) => {
+  const handlePublish = async (proc: AuditProcess) => {
     const publishedProc: AuditProcess = {
       ...proc,
       status: 'Published',
@@ -149,27 +216,54 @@ export default function App() {
     };
     setActivities([newActivity, ...activities]);
 
-    showToast(`SOP Published to ${publishedProc.metrics?.totalAssigned} agents!`);
+    showToast(`Publishing "${proc.title}" and quiz questions to Supabase...`, 'info');
+    const ok = await saveProcessUpdate(publishedProc);
+    if (ok) {
+      showToast(`SOP & ${proc.quiz.questions.length} questions saved to Supabase!`);
+    } else {
+      showToast(`SOP Published to ${publishedProc.metrics?.totalAssigned} agents!`);
+    }
     setCurrentTab('updates');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const handleDeleteProcess = async (processId: string) => {
+    setProcesses((prev) => prev.filter((p) => p.id !== processId));
+    showToast('Deleting process from Supabase...', 'info');
+    const ok = await deleteProcessFromSupabase(processId);
+    if (ok) {
+      showToast('Process deleted from Supabase successfully.');
+    } else {
+      showToast('Process deleted locally.');
+    }
+  };
+
   // ADMIN AGENT METRIC UPDATE
-  const handleUpdateAgentPerformance = (
+  const handleUpdateAgentPerformance = async (
     agentId: string,
     updates: { qualityScore: number; fatalCount: number; callAuditCount: number }
   ) => {
+    const target = agents.find((a) => a.id === agentId);
+    const updatedAgent: Agent | null = target
+      ? { ...target, ...updates, score: updates.qualityScore, qualityScore: updates.qualityScore }
+      : null;
+
     setAgents((prev) =>
       prev.map((a) => (a.id === agentId ? { ...a, ...updates, score: updates.qualityScore } : a))
     );
-    const targetAgent = agents.find((a) => a.id === agentId);
+
+    if (updatedAgent) {
+      saveAgent(updatedAgent);
+    }
+
     showToast(
-      `Saved: ${targetAgent?.name || 'Agent'} (Quality: ${updates.qualityScore}%, Fatals: ${updates.fatalCount}, Audits: ${updates.callAuditCount})`
+      `Saved: ${target?.name || 'Agent'} (Quality: ${updates.qualityScore}%, Fatals: ${updates.fatalCount}, Audits: ${updates.callAuditCount})`
     );
   };
 
-  const handleUpdateAgent = (updatedAgent: Agent) => {
+  const handleUpdateAgent = async (updatedAgent: Agent) => {
     setAgents((prev) => prev.map((a) => (a.id === updatedAgent.id ? updatedAgent : a)));
+    saveAgent(updatedAgent);
     showToast(
       `Saved: ${updatedAgent.name} (Quality: ${updatedAgent.qualityScore}%, Fatals: ${updatedAgent.fatalCount}, Audits: ${updatedAgent.callAuditCount})`
     );
@@ -179,6 +273,11 @@ export default function App() {
   const handleConfirmPerformanceImport = (rows: PerformanceImportRow[]) => {
     const { updatedAgents, importedCount } = applyPerformanceImport(rows, agents);
     setAgents(updatedAgents);
+
+    // Persist all calibrated agents to Supabase
+    for (const ag of updatedAgents) {
+      saveAgent(ag);
+    }
 
     // Record activity in live operational audit stream
     const newAct: ActivityItem = {
@@ -192,11 +291,11 @@ export default function App() {
     };
     setActivities((prev) => [newAct, ...prev]);
 
-    showToast('Performance data imported successfully.');
+    showToast(`Performance data for ${importedCount} agents saved to Supabase.`);
   };
 
   // Record submission from ProcessDetailView or Quiz Modal
-  const handleQuizSubmission = (
+  const handleQuizSubmission = async (
     process: AuditProcess,
     percentage: number,
     earnedMarks: number,
@@ -226,7 +325,7 @@ export default function App() {
       totalMarks,
       percentage,
       passed: percentage >= 80,
-      submittedAt: 'Just now',
+      submittedAt: new Date().toISOString(),
       answersSummary: {
         correct: answersDetail
           ? answersDetail.filter((a) => a.isCorrect).length
@@ -236,15 +335,38 @@ export default function App() {
       answersDetail
     };
 
-    setSubmissions([newSub, ...submissions]);
+    setSubmissions((prev) => [newSub, ...prev]);
 
     // Update agent's completed process count
+    const updatedAgent: Agent = {
+      ...activeAgent,
+      completedProcesses: (activeAgent.completedProcesses || 0) + 1,
+      pendingQuizzes: Math.max(0, (activeAgent.pendingQuizzes || 1) - 1)
+    };
+
     setAgents((prev) =>
-      prev.map((a) =>
-        a.id === activeAgent.id
-          ? { ...a, completedProcesses: (a.completedProcesses || 0) + 1 }
-          : a
-      )
+      prev.map((a) => (a.id === activeAgent.id ? updatedAgent : a))
+    );
+
+    // Update process completion metrics
+    const currentCompleted = process.metrics?.completedCount || 0;
+    const totalAssigned = process.metrics?.totalAssigned || 12;
+    const newCompletedCount = currentCompleted + 1;
+    const newRate = Math.round((newCompletedCount / Math.max(1, totalAssigned)) * 100);
+
+    const updatedProcess: AuditProcess = {
+      ...process,
+      metrics: {
+        ...process.metrics,
+        completedCount: newCompletedCount,
+        totalAssigned,
+        completionRate: newRate,
+        publishedDate: process.metrics?.publishedDate || process.effectiveDate
+      }
+    };
+
+    setProcesses((prev) =>
+      prev.map((p) => (p.id === process.id ? updatedProcess : p))
     );
 
     // Update activity feed
@@ -257,14 +379,26 @@ export default function App() {
       scoreBadge: percentage >= 80 ? 'Certified ✓' : 'Completed',
       timestamp: 'Just now'
     };
-    setActivities([newAct, ...activities]);
+    setActivities((prev) => [newAct, ...prev]);
+
+    // Save submission and individual question user responses to Supabase
+    saveSubmissionToSupabase(newSub).then((saved) => {
+      if (saved) {
+        showToast(`Submission & responses recorded in Supabase!`);
+      }
+    });
+
+    // Save updated agent & process metrics to Supabase
+    saveAgent(updatedAgent);
+    saveProcessUpdate(updatedProcess);
 
     showToast(`Submission certified: ${percentage}% scorecard generated!`);
   };
 
-  const handleAddAgent = (newAgent: Agent) => {
-    setAgents([newAgent, ...agents]);
-    showToast(`Agent ${newAgent.name} added to roster!`);
+  const handleAddAgent = async (newAgent: Agent) => {
+    setAgents((prev) => [newAgent, ...prev]);
+    saveAgent(newAgent);
+    showToast(`Agent ${newAgent.name} saved to Supabase!`);
   };
 
   const handleResolveAlert = (alertId: string) => {
@@ -342,10 +476,42 @@ export default function App() {
             const found = agents.find((a) => a.id === id);
             showToast(`Switched active agent to ${found?.name || id}`);
           }}
+          supabaseStatus={supabaseStatus}
+          onOpenSupabaseModal={() => setIsSupabaseModalOpen(true)}
         />
 
         {/* Content Container */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 bg-gradient-to-br from-slate-50 via-indigo-50/20 to-purple-50/20">
+          {/* Supabase Notice Banner if tables aren't set up yet */}
+          {supabaseStatus && !supabaseStatus.tablesExist && !isBannerDismissed && (
+            <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-emerald-500/10 via-teal-500/10 to-indigo-500/10 border border-emerald-500/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                <div>
+                  <span className="font-bold text-slate-800">Supabase Connected:</span>{' '}
+                  <span className="text-slate-600">
+                    Project <code className="bg-white/80 px-1.5 py-0.5 rounded text-emerald-700 font-mono">xxqdxzqdtrqzfoyvpenv</code> is active. Run the SQL schema once in your Supabase SQL Editor to enable persistent cloud storage.
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                <button
+                  onClick={() => setIsSupabaseModalOpen(true)}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all shadow-xs cursor-pointer"
+                >
+                  View Schema & Setup
+                </button>
+                <button
+                  onClick={() => setIsBannerDismissed(true)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 cursor-pointer"
+                  title="Dismiss banner"
+                >
+                  <span className="material-symbols-outlined text-[16px]">close</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* DASHBOARD TAB */}
           {currentTab === 'dashboard' &&
             (userRole === 'admin' ? (
@@ -385,6 +551,7 @@ export default function App() {
               onSelectProcess={handleSelectProcess}
               onNewAudit={() => handleTabChange('new-audit')}
               onOpenProcessDetail={handleOpenProcessDetail}
+              onDeleteProcess={handleDeleteProcess}
             />
           )}
 
@@ -516,6 +683,21 @@ export default function App() {
 
       {/* Profile Modal */}
       {isProfileOpen && <ProfileModal onClose={() => setIsProfileOpen(false)} />}
+
+      {/* Supabase Database Connection & Setup Modal */}
+      {isSupabaseModalOpen && (
+        <SupabaseStatusModal
+          isOpen={isSupabaseModalOpen}
+          onClose={() => setIsSupabaseModalOpen(false)}
+          status={supabaseStatus}
+          isLoading={isLoadingSupabase}
+          onRefreshHealth={loadDataFromSupabase}
+          onDataSyncSuccess={() => {
+            loadDataFromSupabase();
+            showToast('Synchronized with Supabase!');
+          }}
+        />
+      )}
 
       {/* Toast Feedback */}
       {toast && (
