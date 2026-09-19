@@ -1,0 +1,6 @@
+{
+  "name": "ProcessHub",
+  "description": "Quality assurance, audit workflows, and agent process training platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
