@@ -102,6 +102,25 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
           )}
 
           <button
+            onClick={() => {
+              if (agents.length > 0) {
+                const target = agents[0];
+                setEditingAgent(target);
+                setFormQualityScore(target.qualityScore ?? target.score ?? 85);
+                setFormFatalCount(target.fatalCount ?? 0);
+                setFormCallAuditCount(target.callAuditCount ?? 1);
+                setFormStatus(target.status === 'Inactive' ? 'Inactive' : 'Active');
+              }
+            }}
+            disabled={agents.length === 0}
+            className="px-4 py-2.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 text-indigo-700 font-bold text-xs sm:text-sm flex items-center gap-2 border border-indigo-200 transition-all cursor-pointer shadow-xs"
+            title="Update Quality Score & Calibrate Metrics"
+          >
+            <span className="material-symbols-outlined text-[20px] text-indigo-600">tune</span>
+            <span>Update Quality Score</span>
+          </button>
+
+          <button
             onClick={onOpenAddAgent}
             className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white font-bold text-xs sm:text-sm flex items-center gap-2 shadow-lg shadow-indigo-500/20 hover:scale-[1.01] active:scale-[0.98] transition-all cursor-pointer"
           >
@@ -134,10 +153,12 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
               Avg Quality Score
             </span>
             <p className="text-2xl sm:text-3xl font-black text-indigo-600 mt-1">
-              {(
-                agents.reduce((sum, a) => sum + (a.qualityScore ?? a.score ?? 0), 0) /
-                (agents.length || 1)
-              ).toFixed(1)}
+              {agents.length > 0
+                ? (
+                    agents.reduce((sum, a) => sum + (a.qualityScore ?? a.score ?? 0), 0) /
+                    agents.length
+                  ).toFixed(1)
+                : '0.0'}
               %
             </p>
             <span className="text-xs text-indigo-500 font-semibold mt-0.5 block">
@@ -201,10 +222,37 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
 
       {/* Agent Cards Grid with Individual Management */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {filtered.map((agent) => {
-          const qScore = agent.qualityScore ?? agent.score ?? 90;
-          const fCount = agent.fatalCount ?? 0;
-          const cCount = agent.callAuditCount ?? 30;
+        {filtered.length === 0 ? (
+          <div className="col-span-full py-16 text-center text-slate-400 bg-white rounded-3xl border border-dashed border-slate-200 p-8 shadow-xs">
+            <span className="material-symbols-outlined text-5xl mb-3 text-slate-300">group_off</span>
+            <p className="text-base font-semibold text-slate-700">No agents found</p>
+            <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+              {search || selectedTeam !== 'All'
+                ? 'No agents match your filter or search query.'
+                : 'Add an agent with Supabase account provisioning or import QA performance data.'}
+            </p>
+            <div className="mt-4 flex items-center justify-center gap-2">
+              <button
+                onClick={onOpenAddAgent}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition-colors cursor-pointer"
+              >
+                + Add First Agent
+              </button>
+              {onOpenImportPerformance && (
+                <button
+                  onClick={onOpenImportPerformance}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-colors cursor-pointer"
+                >
+                  Import Performance Data
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          filtered.map((agent) => {
+            const qScore = agent.qualityScore ?? agent.score ?? 0;
+            const fCount = agent.fatalCount ?? 0;
+            const cCount = agent.callAuditCount ?? 0;
 
           return (
             <div
@@ -222,6 +270,9 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                     <div>
                       <h3 className="font-bold text-sm sm:text-base text-slate-900">{agent.name}</h3>
                       <p className="text-xs text-slate-500">{agent.role}</p>
+                      {agent.email && (
+                        <p className="text-[11px] text-slate-400 font-medium truncate max-w-[180px]">{agent.email}</p>
+                      )}
                       <span className="inline-block mt-1 text-[11px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
                         {agent.team}
                       </span>
@@ -324,7 +375,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
               </div>
             </div>
           );
-        })}
+        }))}
       </div>
 
       {/* INDIVIDUAL AGENT MANAGEMENT MODAL */}
@@ -342,7 +393,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                 <div>
                   <h3 className="font-extrabold text-base">{editingAgent.name}</h3>
                   <p className="text-xs text-indigo-100">
-                    {editingAgent.team} • {editingAgent.role}
+                    {editingAgent.email ? `${editingAgent.email} • ` : ''}{editingAgent.team} • {editingAgent.role}
                   </p>
                 </div>
               </div>
@@ -360,6 +411,38 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
               <div className="p-3 rounded-2xl bg-indigo-50/70 border border-indigo-100 text-xs text-indigo-900 font-medium">
                 Admin Calibration: Any updates saved here will appear automatically on{' '}
                 <strong>{editingAgent.name}</strong>'s personal dashboard.
+              </div>
+
+              {/* Agent Selection Dropdown */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Select Agent
+                </label>
+                <select
+                  value={editingAgent.id}
+                  onChange={(e) => {
+                    const selected = agents.find((a) => a.id === e.target.value);
+                    if (selected) {
+                      setEditingAgent(selected);
+                      setFormQualityScore(selected.qualityScore ?? selected.score ?? 85);
+                      setFormFatalCount(selected.fatalCount ?? 0);
+                      setFormCallAuditCount(selected.callAuditCount ?? 1);
+                      setFormStatus(selected.status === 'Inactive' ? 'Inactive' : 'Active');
+                    }
+                  }}
+                  className="w-full px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-900 font-bold text-xs outline-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
+                >
+                  {agents.map((ag) => (
+                    <option key={ag.id} value={ag.id}>
+                      {ag.name} {ag.email ? `(${ag.email})` : ''}
+                    </option>
+                  ))}
+                </select>
+                {editingAgent.email && (
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Email: <span className="font-semibold text-slate-700">{editingAgent.email}</span>
+                  </p>
+                )}
               </div>
 
               {/* 1. Quality Score */}

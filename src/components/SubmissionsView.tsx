@@ -215,8 +215,14 @@ export const SubmissionsView: React.FC<SubmissionsViewProps> = ({
 
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-10 text-center text-slate-400 text-xs">
-                    No submissions found matching the criteria.
+                  <td colSpan={6} className="py-12 text-center text-slate-400">
+                    <span className="material-symbols-outlined text-4xl mb-2 text-slate-300">assignment_turned_in</span>
+                    <p className="text-sm font-semibold text-slate-600">No audit submissions yet</p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {search || filter !== 'All'
+                        ? 'No submissions match your search or filter criteria.'
+                        : 'Submissions will appear here once agents complete their certification quizzes.'}
+                    </p>
                   </td>
                 </tr>
               )}

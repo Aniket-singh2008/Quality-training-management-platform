@@ -6,6 +6,8 @@ interface ProcessDetailViewProps {
   process: AuditProcess;
   currentAgent: Agent;
   userRole: 'admin' | 'agent';
+  allAgents?: Agent[];
+  allSubmissions?: Submission[];
   existingSubmission?: Submission;
   onBack: () => void;
   onSubmitQuiz: (
@@ -25,23 +27,100 @@ interface ProcessDetailViewProps {
     }>
   ) => void;
   onSelectEdit?: (process: AuditProcess) => void;
+  onRemindAgent?: (agentId: string, processTitle: string) => void;
 }
 
 export const ProcessDetailView: React.FC<ProcessDetailViewProps> = ({
   process,
   currentAgent,
   userRole,
+  allAgents = [],
+  allSubmissions = [],
   existingSubmission,
   onBack,
   onSubmitQuiz,
-  onSelectEdit
+  onSelectEdit,
+  onRemindAgent
 }) => {
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string, string>>({});
   const [submittedLocal, setSubmittedLocal] = useState(false);
   const [showScorecardModal, setShowScorecardModal] = useState(false);
+  const [viewingAgentScorecard, setViewingAgentScorecard] = useState<Submission | null>(null);
+  const [remindedAgentIds, setRemindedAgentIds] = useState<Set<string>>(new Set());
+
+  if (!process) {
+    return (
+      <div className="p-8 text-center bg-white rounded-2xl border border-slate-200 shadow-sm max-w-2xl mx-auto my-12">
+        <span className="material-symbols-outlined text-4xl text-slate-400 mb-2">assignment_late</span>
+        <h3 className="text-base font-bold text-slate-800 mb-1">No process update found</h3>
+        <p className="text-sm text-slate-500 mb-4">Please select a process from the updates page.</p>
+        <button
+          onClick={onBack}
+          className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-semibold hover:bg-indigo-700 transition-colors cursor-pointer"
+        >
+          Back to Updates
+        </button>
+      </div>
+    );
+  }
+
+  // Check if agent is assigned
+  const isAssigned =
+    userRole === 'admin' ||
+    !process.audience ||
+    process.audience.type === 'all' ||
+    (Array.isArray(process.audience.assignedAgents) &&
+      process.audience.assignedAgents.includes(currentAgent?.id || ''));
+
+  if (userRole === 'agent' && !isAssigned) {
+    return (
+      <div className="p-8 text-center bg-white rounded-3xl border border-slate-200 shadow-sm max-w-xl mx-auto my-12 space-y-4">
+        <div className="w-14 h-14 bg-amber-100 text-amber-600 rounded-2xl flex items-center justify-center mx-auto">
+          <span className="material-symbols-outlined text-3xl">lock</span>
+        </div>
+        <h2 className="text-xl font-bold text-slate-900">Process Update Not Assigned</h2>
+        <p className="text-xs text-slate-600 leading-relaxed">
+          This Process Update and certification assessment is targeted to specific team members and is not assigned to your profile.
+        </p>
+        <button
+          onClick={onBack}
+          className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-colors cursor-pointer"
+        >
+          Back to My Dashboard
+        </button>
+      </div>
+    );
+  }
+
+  // Admin roster data
+  const activeAgentsList = allAgents.filter(
+    (a) => a.status !== 'Inactive' && (a.role || '').toLowerCase() === 'agent'
+  );
+  const targetAgents = activeAgentsList.filter((a) => {
+    if (!process.audience || process.audience.type === 'all') return true;
+    return (
+      Array.isArray(process.audience.assignedAgents) &&
+      process.audience.assignedAgents.includes(a.id)
+    );
+  });
+
+  const processSubmissions = allSubmissions.filter((s) => s.processId === process.id);
+  const submissionsByAgentId = new Map(processSubmissions.map((s) => [s.agentId, s]));
+
+  const completedCount = targetAgents.filter((a) => submissionsByAgentId.has(a.id)).length;
+  const pendingCount = targetAgents.length - completedCount;
+  const completionRate =
+    targetAgents.length > 0 ? Math.round((completedCount / targetAgents.length) * 100) : 0;
+
+  const handleRemindClick = (agent: Agent) => {
+    setRemindedAgentIds((prev) => new Set([...prev, agent.id]));
+    if (onRemindAgent) {
+      onRemindAgent(agent.id, process.title);
+    }
+  };
 
   const isCompleted = !!existingSubmission || submittedLocal;
-  const questions = process.quiz.questions;
+  const questions = process.quiz?.questions || [];
   const totalQuestions = questions.length;
   const totalPossibleMarks = questions.reduce((sum, q) => sum + (Number(q.points) || 0), 0);
 
@@ -141,6 +220,15 @@ export const ProcessDetailView: React.FC<ProcessDetailViewProps> = ({
               High Priority Compliance
             </span>
           )}
+          <span className="text-xs font-bold px-2.5 py-1 rounded-lg bg-purple-50 text-purple-700 border border-purple-100 flex items-center gap-1.5">
+            <span className="material-symbols-outlined text-[15px]">group</span>
+            <span>
+              Target:{' '}
+              {!process.audience || process.audience.type === 'all'
+                ? `All Active Agents (${targetAgents.length})`
+                : `${targetAgents.length} Selected Agent${targetAgents.length === 1 ? '' : 's'}`}
+            </span>
+          </span>
           <span className="text-xs text-slate-400 font-medium">
             Effective Date: {process.effectiveDate}
           </span>
@@ -189,6 +277,141 @@ export const ProcessDetailView: React.FC<ProcessDetailViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* ADMIN ONLY: TARGET AGENTS & COMPLETION ROSTER */}
+      {userRole === 'admin' && (
+        <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-sm space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
+            <div>
+              <h2 className="text-lg font-extrabold text-slate-900 flex items-center gap-2">
+                <span className="material-symbols-outlined text-indigo-600">assignment_ind</span>
+                Agent Assignments &amp; Completion Status
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Real-time tracking of agents who received this Process Update and their quiz certification progress.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="px-3 py-1 rounded-full text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                {targetAgents.length} Targeted Agents
+              </span>
+            </div>
+          </div>
+
+          {/* Quick Metrics */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+              <span className="text-[11px] font-semibold text-slate-500 block">Total Targeted</span>
+              <span className="text-xl font-black text-slate-900 mt-1 block">{targetAgents.length}</span>
+            </div>
+            <div className="p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200/80">
+              <span className="text-[11px] font-semibold text-emerald-700 block">Completed Quiz</span>
+              <span className="text-xl font-black text-emerald-900 mt-1 block">{completedCount}</span>
+            </div>
+            <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200/80">
+              <span className="text-[11px] font-semibold text-amber-700 block">Pending Quiz</span>
+              <span className="text-xl font-black text-amber-900 mt-1 block">{pendingCount}</span>
+            </div>
+            <div className="p-4 rounded-2xl bg-indigo-50/70 border border-indigo-200/80">
+              <span className="text-[11px] font-semibold text-indigo-700 block">Completion Rate</span>
+              <span className="text-xl font-black text-indigo-950 mt-1 block">{completionRate}%</span>
+            </div>
+          </div>
+
+          {/* Agent Roster Table */}
+          <div className="border border-slate-200/80 rounded-2xl overflow-hidden">
+            <div className="bg-slate-50/90 px-4 py-3 border-b border-slate-200/80 grid grid-cols-12 text-xs font-bold text-slate-600">
+              <span className="col-span-5 sm:col-span-4">Agent Name &amp; Email</span>
+              <span className="col-span-3 hidden sm:block">Role / Squad</span>
+              <span className="col-span-4 sm:col-span-3">Quiz Status</span>
+              <span className="col-span-3 sm:col-span-2 text-right">Action</span>
+            </div>
+
+            <div className="divide-y divide-slate-100 max-h-[360px] overflow-y-auto">
+              {targetAgents.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-400">
+                  No active agents currently assigned to this process update.
+                </div>
+              ) : (
+                targetAgents.map((agent) => {
+                  const sub = submissionsByAgentId.get(agent.id);
+                  const isSubmitted = !!sub;
+                  const isReminded = remindedAgentIds.has(agent.id);
+
+                  return (
+                    <div
+                      key={agent.id}
+                      className="px-4 py-3.5 grid grid-cols-12 items-center text-xs hover:bg-slate-50/80 transition-colors"
+                    >
+                      <div className="col-span-5 sm:col-span-4 flex items-center gap-3 min-w-0 pr-2">
+                        <div
+                          className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
+                            agent.colorClass || 'bg-indigo-600 text-white'
+                          }`}
+                        >
+                          {agent.initial || agent.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-bold text-slate-900 truncate">{agent.name}</p>
+                          <p className="text-[11px] text-slate-500 truncate font-mono">{agent.email}</p>
+                        </div>
+                      </div>
+
+                      <div className="col-span-3 hidden sm:block">
+                        <span className="text-slate-600 font-medium">
+                          {agent.team || 'Customer Support'}
+                        </span>
+                      </div>
+
+                      <div className="col-span-4 sm:col-span-3">
+                        {isSubmitted ? (
+                          <div className="flex flex-col gap-0.5">
+                            <span className="inline-flex items-center gap-1 font-bold text-emerald-700">
+                              <span className="material-symbols-outlined text-[15px]">check_circle</span>
+                              Completed ({sub.percentage}%)
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              {sub.earnedMarks ?? sub.score}/{sub.totalPossibleMarks ?? sub.totalMarks} Marks
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 font-semibold text-amber-700 bg-amber-50 border border-amber-200/80 px-2 py-0.5 rounded-full text-[11px]">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                            Pending Submission
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="col-span-3 sm:col-span-2 text-right">
+                        {isSubmitted ? (
+                          <button
+                            onClick={() => setViewingAgentScorecard(sub)}
+                            className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[11px] transition-colors cursor-pointer"
+                          >
+                            Scorecard
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleRemindClick(agent)}
+                            disabled={isReminded}
+                            className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-colors cursor-pointer ${
+                              isReminded
+                                ? 'bg-slate-100 text-slate-400 cursor-default'
+                                : 'bg-amber-100 hover:bg-amber-200 text-amber-800'
+                            }`}
+                          >
+                            {isReminded ? 'Reminded ✓' : 'Remind'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 3. SECTION 1: SOP DOCUMENTATION CONTENT */}
       <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-sm space-y-6">

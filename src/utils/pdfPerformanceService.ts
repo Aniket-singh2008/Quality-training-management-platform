@@ -131,7 +131,7 @@ export function parsePerformanceText(text: string): RawPerformanceRow[] {
 
     let parts: string[] = [];
 
-    // Case 1: Pipe separated (e.g. AGT001 | Rahul | 94% | 1 | 12)
+    // Case 1: Pipe separated (e.g. AGT-001 | Agent Name | 94% | 1 | 12)
     if (line.includes('|')) {
       parts = line.split('|').map((p) => p.trim());
     }
@@ -503,86 +503,3 @@ export function applyPerformanceImport(
   };
 }
 
-// ============================================================================
-// 5. SAMPLE REPORT GENERATOR (For Admin Instant Testing)
-// ============================================================================
-
-/**
- * Standard text content representing an authentic QA performance report.
- */
-export const SAMPLE_PERFORMANCE_REPORT_TEXT = `Agent ID | Agent Name | Quality Score | Fatal Count | Call Audit Count
-AGT001 | Rahul Mehta | 94% | 1 | 12
-AGT002 | Priya Patel | 89% | 2 | 10
-AGT003 | Aman Verma | 98% | 0 | 45
-AGT004 | Sneha Rao | 88% | 1 | 28
-AGT005 | Vikram Joshi | 92% | 1 | 32
-AGT006 | Neha Kapoor | 97% | 0 | 40
-AGT007 | Karan Nair | 93% | 0 | 34
-AGT099 | Unknown Agent | 91% | 0 | 15`;
-
-/**
- * Generates a real, valid binary PDF Blob (PDF-1.4 spec) containing the performance table,
- * allowing Admin to download and upload an actual .pdf file in their browser.
- */
-export function generateSamplePdfBlob(): Blob {
-  const content = [
-    '%PDF-1.4',
-    '1 0 obj',
-    '<< /Type /Catalog /Pages 2 0 R >>',
-    'endobj',
-    '2 0 obj',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    'endobj',
-    '3 0 obj',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
-    'endobj',
-    '5 0 obj',
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-    'endobj'
-  ];
-
-  // PDF Text stream with performance data lines
-  const textLines = [
-    'PROCESSHUB QA AUDIT CYCLE - PERFORMANCE REPORT',
-    'Date: September 2026 | Calibration Cycle: Q4 Weekly',
-    '------------------------------------------------------------------------',
-    'Agent ID | Agent Name | Quality Score | Fatal Count | Call Audit Count',
-    'AGT001 | Rahul Mehta | 94% | 1 | 12',
-    'AGT002 | Priya Patel | 89% | 2 | 10',
-    'AGT003 | Aman Verma | 98% | 0 | 45',
-    'AGT004 | Sneha Rao | 88% | 1 | 28',
-    'AGT005 | Vikram Joshi | 92% | 1 | 32',
-    'AGT006 | Neha Kapoor | 97% | 0 | 40',
-    'AGT007 | Karan Nair | 93% | 0 | 34',
-    'AGT099 | Unknown Agent | 91% | 0 | 15',
-    '------------------------------------------------------------------------',
-    'Confidential QA Performance Document - Generated for ProcessHub'
-  ];
-
-  let streamBody = 'BT\n/F1 10 Tf\n50 720 Td\n18 TL\n';
-  textLines.forEach((l) => {
-    // Escape parens and backslashes in PDF text strings
-    const escaped = l.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
-    streamBody += `(${escaped}) Tj T*\n`;
-  });
-  streamBody += 'ET\n';
-
-  const streamLength = streamBody.length;
-  content.push('4 0 obj');
-  content.push(`<< /Length ${streamLength} >>`);
-  content.push('stream');
-  content.push(streamBody.trim());
-  content.push('endstream');
-  content.push('endobj');
-  content.push('xref');
-  content.push('0 6');
-  content.push('0000000000 65535 f ');
-  content.push('trailer');
-  content.push('<< /Size 6 /Root 1 0 R >>');
-  content.push('startxref');
-  content.push('500');
-  content.push('%%EOF');
-
-  const pdfString = content.join('\n');
-  return new Blob([pdfString], { type: 'application/pdf' });
-}

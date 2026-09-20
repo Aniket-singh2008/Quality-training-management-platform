@@ -1,6 +1,5 @@
 import { supabase, createEphemeralClient } from '../lib/supabase';
 import { AuditProcess, Agent, Submission, Question, UserProfile, NotificationItem } from '../types';
-import { INITIAL_PROCESSES, INITIAL_AGENTS } from '../data/initialData';
 
 export interface SupabaseHealthStatus {
   isConnected: boolean;
@@ -273,14 +272,13 @@ export async function getCurrentSessionAndProfile(): Promise<{
 
 /**
  * Sign in user with email & password via Supabase Auth.
- * Enforces is_active check for agent accounts and detects pending email verification.
+ * Enforces is_active check for agent accounts.
  */
 export async function signInUser(
   email: string,
   pass: string
 ): Promise<{
   success: boolean;
-  requiresEmailVerification?: boolean;
   email?: string;
   error?: string;
   user?: any;
@@ -295,19 +293,62 @@ export async function signInUser(
     });
 
     if (error) {
+      const errText = error.message.toLowerCase();
       if (
-        error.message.toLowerCase().includes('email not confirmed') ||
-        (error as any).code === 'email_not_confirmed'
+        errText.includes('invalid login credentials') ||
+        errText.includes('invalid credentials') ||
+        (error as any).status === 400
       ) {
         return {
           success: false,
-          requiresEmailVerification: true,
-          email: trimmedEmail,
-          error:
-            'Your email is awaiting verification. Please enter the 6-digit verification code sent to your email to activate your account and sign in.',
+          error: 'Invalid email or password. Please verify your credentials and try again.',
         };
       }
-      return { success: false, error: error.message };
+      if (
+        errText.includes('email not confirmed') ||
+        (error as any).code === 'email_not_confirmed'
+      ) {
+        // Attempt quick auto-confirm via backend API and retry sign-in
+        try {
+          const autoConfirmResp = await fetch('/api/admin/create-agent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: trimmedEmail,
+              password: pass,
+              fullName: trimmedEmail.split('@')[0],
+            }),
+          });
+          if (autoConfirmResp.ok) {
+            const retryRes = await supabase.auth.signInWithPassword({
+              email: trimmedEmail,
+              password: pass,
+            });
+            if (retryRes.data?.session && retryRes.data?.user) {
+              const user = retryRes.data.user;
+              const session = retryRes.data.session;
+              let profile = await fetchUserProfile(user.id);
+              if (!profile) {
+                profile = {
+                  id: user.id,
+                  email: user.email || trimmedEmail,
+                  fullName: user.user_metadata?.full_name || trimmedEmail.split('@')[0],
+                  role: (user.user_metadata?.role as 'admin' | 'agent') || 'agent',
+                  isActive: true,
+                };
+              }
+              return { success: true, user, session, profile };
+            }
+          }
+        } catch {
+          // ignore
+        }
+        return {
+          success: false,
+          error: 'Account activation pending with QA Administration. Please contact your QA Lead.',
+        };
+      }
+      return { success: false, error: error.message || 'Invalid email or password. Please check your credentials.' };
     }
 
     if (!data.user || !data.session) {
@@ -376,7 +417,6 @@ export async function signInUser(
 /**
  * Registers the initial Primary Admin account.
  * Allowed ONLY if no primary admin exists in public.profiles.
- * Handles both instant session (confirm email OFF) and OTP verification (confirm email ON).
  */
 export async function registerPrimaryAdmin(
   email: string,
@@ -384,8 +424,6 @@ export async function registerPrimaryAdmin(
   fullName: string
 ): Promise<{
   success: boolean;
-  requiresEmailVerification?: boolean;
-  isRateLimited?: boolean;
   email?: string;
   error?: string;
   user?: any;
@@ -463,28 +501,44 @@ export async function registerPrimaryAdmin(
         signInRes.error?.message?.toLowerCase().includes('email not confirmed') ||
         (signInRes.error as any)?.code === 'email_not_confirmed'
       ) {
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('processhub_admin_initialized', 'true');
+        // Try auto-confirm via server endpoint if available
+        try {
+          await fetch('/api/admin/create-agent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: trimmedEmail, password: pass, fullName: trimmedName }),
+          });
+          const retrySignIn = await supabase.auth.signInWithPassword({ email: trimmedEmail, password: pass });
+          if (retrySignIn.data?.session && retrySignIn.data?.user) {
+            const user = retrySignIn.data.user;
+            const session = retrySignIn.data.session;
+            const profile: UserProfile = {
+              id: user.id,
+              email: trimmedEmail,
+              fullName: trimmedName,
+              role: 'admin',
+              isActive: true,
+            };
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('processhub_admin_initialized', 'true');
+              localStorage.setItem('processhub_cached_profile', JSON.stringify(profile));
+            }
+            return { success: true, session, user, profile };
+          }
+        } catch {
+          // ignore
         }
         return {
           success: false,
-          requiresEmailVerification: true,
-          isRateLimited,
-          email: trimmedEmail,
-          error: isRateLimited
-            ? 'Account is created in Supabase Auth, but Supabase free SMTP hit its rate limit (3 emails/hr). Outgoing verification emails are temporarily blocked.'
-            : 'Your Primary Admin account is created and awaiting email verification.',
+          error: 'Your Primary Admin account was registered. Please sign in with your email and password.',
         };
       }
 
       if (isRateLimited) {
         return {
           success: false,
-          isRateLimited: true,
-          requiresEmailVerification: true,
-          email: trimmedEmail,
           error:
-            'Supabase email rate limit exceeded (over_email_send_rate_limit). Supabase free tier limits built-in emails to 3-4 per hour. Outgoing verification emails are blocked.',
+            'Supabase email rate limit exceeded. Please wait a few moments and sign in with your registered email and password.',
         };
       }
 
@@ -507,139 +561,22 @@ export async function registerPrimaryAdmin(
       }
     }
 
-    // Session is active (email confirmations disabled or auto-confirmed)
-    if (session) {
-      try {
-        await supabase.from('profiles').upsert({
-          id: data.user.id,
-          full_name: trimmedName,
-          role: 'admin',
-          is_active: true,
-        });
-      } catch (insertErr) {
-        console.warn('Admin profile upsert note:', insertErr);
-      }
-
-      const profile: UserProfile = {
-        id: data.user.id,
-        email: trimmedEmail,
-        fullName: trimmedName,
-        role: 'admin',
-        isActive: true,
-      };
-
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('processhub_admin_initialized', 'true');
-        localStorage.setItem('processhub_cached_profile', JSON.stringify(profile));
-      }
-
-      return {
-        success: true,
-        user: data.user,
-        session,
-        profile,
-      };
-    }
-
-    // Email confirmation is required by Supabase Auth
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('processhub_admin_initialized', 'true');
-    }
-
-    return {
-      success: false,
-      requiresEmailVerification: true,
-      email: trimmedEmail,
-      user: data.user,
-      error: `A 6-digit verification code has been sent to ${trimmedEmail}. Please enter the code below to activate your Primary Admin account.`,
-    };
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Failed to register Primary Admin.' };
-  }
-}
-
-/**
- * Verifies the 6-digit OTP code sent to user email.
- * Establishes active Supabase Auth session and persists the admin profile.
- */
-export async function verifyPrimaryAdminOtp(
-  email: string,
-  token: string,
-  fullName?: string
-): Promise<{
-  success: boolean;
-  error?: string;
-  user?: any;
-  session?: any;
-  profile?: UserProfile;
-}> {
-  try {
-    const cleanEmail = email.trim();
-    const cleanToken = token.trim();
-
-    // First attempt type: 'signup'
-    let { data, error } = await supabase.auth.verifyOtp({
-      email: cleanEmail,
-      token: cleanToken,
-      type: 'signup',
-    });
-
-    // If 'signup' fails, fallback to 'email' (for login/magic OTP)
-    if (error) {
-      const fallbackRes = await supabase.auth.verifyOtp({
-        email: cleanEmail,
-        token: cleanToken,
-        type: 'email',
-      });
-      if (!fallbackRes.error && fallbackRes.data.session) {
-        data = fallbackRes.data;
-        error = null;
-      }
-    }
-
-    if (error) {
-      return {
-        success: false,
-        error:
-          error.message ||
-          'Invalid or expired verification code. Please check your inbox or spam folder, or click Resend.',
-      };
-    }
-
-    if (!data.session || !data.user) {
-      return {
-        success: false,
-        error: 'Verification succeeded but no active session was returned. Please try signing in.',
-      };
-    }
-
-    const user = data.user;
-    const session = data.session;
-    const name =
-      fullName?.trim() ||
-      user.user_metadata?.full_name ||
-      cleanEmail.split('@')[0] ||
-      'Primary Admin';
-
-    // Persist into public.profiles with the newly authenticated session
+    // Persist admin profile
     try {
-      const { error: profErr } = await supabase.from('profiles').upsert({
-        id: user.id,
-        full_name: name,
+      await supabase.from('profiles').upsert({
+        id: data.user.id,
+        full_name: trimmedName,
         role: 'admin',
         is_active: true,
       });
-      if (profErr) {
-        console.warn('Upsert profile after OTP note:', profErr.message);
-      }
-    } catch (upsertErr) {
-      console.warn('Profile upsert note:', upsertErr);
+    } catch (insertErr) {
+      console.warn('Admin profile upsert note:', insertErr);
     }
 
     const profile: UserProfile = {
-      id: user.id,
-      email: cleanEmail,
-      fullName: name,
+      id: data.user.id,
+      email: trimmedEmail,
+      fullName: trimmedName,
       role: 'admin',
       isActive: true,
     };
@@ -651,59 +588,20 @@ export async function verifyPrimaryAdminOtp(
 
     return {
       success: true,
+      user: data.user,
       session,
-      user,
       profile,
     };
   } catch (err: any) {
-    return { success: false, error: err?.message || 'Verification failed. Please try again.' };
-  }
-}
-
-/**
- * Resends the 6-digit confirmation email/code to the user.
- */
-export async function resendVerificationOtp(email: string): Promise<{
-  success: boolean;
-  isRateLimited?: boolean;
-  error?: string;
-}> {
-  try {
-    const redirectUrl = typeof window !== 'undefined' ? window.location.origin : undefined;
-    const { error } = await supabase.auth.resend({
-      type: 'signup',
-      email: email.trim(),
-      options: {
-        emailRedirectTo: redirectUrl,
-      },
-    });
-
-    if (error) {
-      const isRateLimited =
-        error.message.toLowerCase().includes('rate limit') ||
-        (error as any).code === 'over_email_send_rate_limit' ||
-        (error as any).status === 429;
-
-      if (isRateLimited) {
-        return {
-          success: false,
-          isRateLimited: true,
-          error:
-            'Supabase free tier rate limit exceeded (3-4 emails/hr). Outgoing verification emails are temporarily blocked.',
-        };
-      }
-      return { success: false, error: error.message };
-    }
-
-    return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Failed to resend verification code.' };
+    return { success: false, error: err?.message || 'Failed to register Primary Admin.' };
   }
 }
 
 /**
  * Provisions a new agent account by Admin.
- * Uses an ephemeral client so the Admin's active session is NEVER wiped or replaced.
+ * Uses the secure Supabase Edge Function / server endpoint with Service Role Key
+ * to automatically confirm email and prevent any email verification request.
+ * Falls back safely to ephemeral client if needed, ensuring the Admin session is NEVER wiped.
  */
 export async function createAgentAccountByAdmin(
   email: string,
@@ -717,89 +615,154 @@ export async function createAgentAccountByAdmin(
   userId?: string;
 }> {
   try {
-    const ephemeralClient = createEphemeralClient();
-    const redirectUrl = typeof window !== 'undefined' ? window.location.origin : undefined;
-    const { data, error } = await ephemeralClient.auth.signUp({
-      email: email.trim(),
-      password: pass,
-      options: {
-        emailRedirectTo: redirectUrl,
-        data: {
-          full_name: fullName.trim(),
-          role: 'agent',
-        },
-      },
-    });
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanName = fullName.trim();
+    const cleanPass = pass.trim();
 
-    if (error) {
-      return { success: false, error: error.message };
+    // Get current active admin session token for authorization
+    let token: string | undefined;
+    try {
+      const sessionRes = await supabase.auth.getSession();
+      token = sessionRes.data.session?.access_token;
+    } catch {
+      // ignore
     }
 
-    if (data.user) {
-      const agentId = data.user.id;
+    let agentId: string | null = null;
+    let failureError: string | null = null;
 
-      // 1. Upsert profile in Supabase
-      try {
-        await supabase.from('profiles').upsert({
-          id: agentId,
-          full_name: fullName.trim(),
-          role: 'agent',
-          is_active: true,
-        });
-      } catch (profErr) {
-        console.warn('Agent profile upsert note:', profErr);
-      }
-
-      // 2. Insert welcome notification into public.notifications
-      try {
-        await supabase.from('notifications').insert({
-          id: `notif-welcome-${agentId}-${Date.now()}`,
-          agent_id: agentId,
-          title: 'Welcome to ProcessHub QA Portal',
-          message: 'Your agent compliance portal has been provisioned by QA Administration. Review published SOPs and complete your knowledge check assessments.',
-          created_at: new Date().toISOString(),
-        });
-      } catch (notifErr) {
-        console.warn('Welcome notification note:', notifErr);
-      }
-
-      // 3. Cache agent locally
-      try {
-        const cached = localStorage.getItem('processhub_agents_cache');
-        const list: Agent[] = cached ? JSON.parse(cached) : [];
-        const newAg: Agent = {
-          id: agentId,
-          agentCode: `AG-${agentId.slice(0, 4).toUpperCase()}`,
-          name: fullName.trim(),
-          initial: fullName.trim().charAt(0).toUpperCase(),
-          colorClass: 'bg-gradient-to-tr from-indigo-500 to-purple-600 text-white',
+    // 1. Primary approach: Invoke Supabase Edge Function 'create-agent'
+    try {
+      const { data: edgeData, error: edgeErr } = await supabase.functions.invoke('create-agent', {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body: {
+          email: cleanEmail,
+          password: cleanPass,
+          fullName: cleanName,
           team,
           role,
-          score: 88,
-          qualityScore: 88,
-          fatalCount: 0,
-          callAuditCount: 15,
-          pendingQuizzes: 1,
-          completedProcesses: 1,
-          rank: list.length + 1,
-          status: 'Active',
-          email: email.trim(),
-        };
-        const exists = list.findIndex((a) => a.id === agentId || a.email.toLowerCase() === email.trim().toLowerCase());
-        if (exists >= 0) {
-          list[exists] = newAg;
-        } else {
-          list.push(newAg);
-        }
-        localStorage.setItem('processhub_agents_cache', JSON.stringify(list));
-      } catch {
-        // ignore
-      }
+        },
+      });
 
-      return { success: true, userId: agentId };
+      if (!edgeErr && edgeData?.success && edgeData?.userId) {
+        agentId = edgeData.userId;
+      } else if (edgeErr) {
+        try {
+          const errJson = await (edgeErr as any)?.context?.json?.();
+          failureError = errJson?.error || edgeErr.message;
+        } catch {
+          failureError = edgeErr.message;
+        }
+      } else if (edgeData && !edgeData.success) {
+        failureError = edgeData.error;
+      }
+    } catch (e: any) {
+      failureError = e?.message;
     }
 
-    return { success: false, error: 'Failed to create agent user.' };
+    // 2. Secondary approach: Call local full-stack server endpoint /api/admin/create-agent
+    if (!agentId) {
+      try {
+        const resp = await fetch('/api/admin/create-agent', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            email: cleanEmail,
+            password: cleanPass,
+            fullName: cleanName,
+            team,
+            role,
+          }),
+        });
+
+        const json = await resp.json();
+        if (resp.ok && json.success && json.userId) {
+          agentId = json.userId;
+        } else if (json.error) {
+          failureError = json.error;
+        }
+      } catch (fetchErr: any) {
+        console.warn('Local /api/admin/create-agent fetch notice:', fetchErr);
+      }
+    }
+
+    // Do NOT fall back to ephemeralClient.auth.signUp()!
+    // auth.signUp() causes Supabase to send verification emails and triggers "Email rate limit exceeded".
+    // Agents must be provisioned strictly with confirmed email via the Edge Function or Server Admin API.
+    if (!agentId) {
+      return {
+        success: false,
+        error:
+          failureError ||
+          'Failed to provision agent account. Ensure the Supabase Edge Function "create-agent" is deployed with SUPABASE_SECRET_KEYS.',
+      };
+    }
+
+    // 3. Ensure matching profile in public.profiles with role = 'agent' and is_active = true
+    try {
+      await supabase.from('profiles').upsert({
+        id: agentId,
+        email: cleanEmail,
+        full_name: cleanName,
+        role: 'agent',
+        is_active: true,
+        team,
+        updated_at: new Date().toISOString(),
+      });
+    } catch (profErr) {
+      console.warn('Agent profile upsert note:', profErr);
+    }
+
+    // 5. Insert welcome notification into public.notifications
+    try {
+      await supabase.from('notifications').insert({
+        id: `notif-welcome-${agentId}-${Date.now()}`,
+        agent_id: agentId,
+        title: 'Welcome to ProcessHub QA Portal',
+        message: 'Your agent compliance portal has been provisioned by QA Administration. Review published SOPs and complete your knowledge check assessments.',
+        created_at: new Date().toISOString(),
+      });
+    } catch (notifErr) {
+      console.warn('Welcome notification note:', notifErr);
+    }
+
+    // 6. Cache agent locally so the dashboard updates immediately
+    try {
+      const cached = localStorage.getItem('processhub_agents_cache');
+      const list: Agent[] = cached ? JSON.parse(cached) : [];
+      const newAg: Agent = {
+        id: agentId,
+        agentCode: `AG-${agentId.slice(0, 4).toUpperCase()}`,
+        name: cleanName,
+        initial: cleanName.charAt(0).toUpperCase(),
+        colorClass: 'bg-gradient-to-tr from-indigo-500 to-purple-600 text-white',
+        team,
+        role,
+        score: 88,
+        qualityScore: 88,
+        fatalCount: 0,
+        callAuditCount: 15,
+        pendingQuizzes: 1,
+        completedProcesses: 1,
+        rank: list.length + 1,
+        status: 'Active',
+        email: cleanEmail,
+      };
+      const exists = list.findIndex((a) => a.id === agentId || a.email?.toLowerCase() === cleanEmail);
+      if (exists >= 0) {
+        list[exists] = newAg;
+      } else {
+        list.push(newAg);
+      }
+      localStorage.setItem('processhub_agents_cache', JSON.stringify(list));
+    } catch {
+      // ignore
+    }
+
+    return { success: true, userId: agentId };
   } catch (err: any) {
     return { success: false, error: err?.message || 'Failed to create agent account.' };
   }
@@ -841,42 +804,11 @@ export async function signOutUser(): Promise<void> {
 }
 
 /**
- * Seeds initial mock data to Supabase if tables exist but are empty.
+ * Checks database tables without creating mock or fake records automatically.
  */
 export async function seedInitialDataIfEmpty(): Promise<boolean> {
-  try {
-    const { count, error } = await supabase
-      .from('process_updates')
-      .select('id', { count: 'exact', head: true });
-
-    if (error) {
-      return false;
-    }
-
-    if (count === 0) {
-      console.info('ProcessHub: Seeding initial processes to Supabase...');
-      // Seed processes
-      for (const proc of INITIAL_PROCESSES) {
-        await saveProcessUpdate(proc);
-      }
-
-      // Only attempt to seed agents if the agents table exists in the database
-      const { error: agTableError } = await supabase
-        .from('agents')
-        .select('id', { count: 'exact', head: true });
-
-      if (!agTableError) {
-        for (const ag of INITIAL_AGENTS) {
-          await saveAgent(ag);
-        }
-      }
-      return true;
-    }
-    return false;
-  } catch (err) {
-    console.warn('Initial seed check note:', err);
-    return false;
-  }
+  // Do NOT seed fake/dummy records automatically; all data must come from real Supabase records
+  return false;
 }
 
 /**
@@ -1123,107 +1055,183 @@ export async function deleteProcessFromSupabase(processId: string): Promise<bool
 }
 
 /**
- * Fetch all agents from Supabase.
+ * Fetch all real agents from Supabase database.
+ * Directly queries the profiles table populated by the working Add Agent feature.
+ * Filters strictly for real users whose profile role is "agent" and active status is true.
  */
 export async function fetchAgentsFromSupabase(): Promise<Agent[] | null> {
   try {
-    const { data, error } = await supabase
-      .from('agents')
+    // 1. Primary database query: load all real profiles from Supabase
+    const { data: profileRows, error: pError } = await supabase
+      .from('profiles')
       .select('*')
-      .order('rank', { ascending: true });
+      .order('created_at', { ascending: true });
 
-    if (error) {
-      // If table 'agents' doesn't exist in Supabase (PGRST205)
-      if (
-        error.code === 'PGRST205' ||
-        error.message?.includes("Could not find the table 'public.agents'")
-      ) {
-        // 1. Try checking profiles table
-        try {
-          const { data: profileRows, error: pError } = await supabase
-            .from('profiles')
-            .select('*');
-
-          if (!pError && profileRows && profileRows.length > 0) {
-            return profileRows.map((p, idx) => ({
-              id: p.id,
-              agentCode: `AG-${1000 + idx}`,
-              name: p.full_name || p.email?.split('@')[0] || `Agent ${idx + 1}`,
-              initial: (p.full_name || p.email || 'A').charAt(0).toUpperCase(),
-              colorClass: 'bg-gradient-to-tr from-indigo-500 to-purple-600 text-white',
-              team: p.team || 'Support Tier 1',
-              role: p.role || 'Customer Experience Specialist',
-              score: 85,
-              qualityScore: 85,
-              fatalCount: 0,
-              callAuditCount: 1,
-              pendingQuizzes: 0,
-              completedProcesses: 0,
-              rank: idx + 1,
-              status: 'Active',
-              email:
-                p.email ||
-                `${(p.full_name || 'agent').toLowerCase().replace(/\s+/g, '.')}@processhub.internal`,
-            }));
+    if (pError) {
+      console.warn('fetchAgentsFromSupabase profiles error:', pError.message);
+      // Fallback: check localStorage cache
+      try {
+        const cached = localStorage.getItem('processhub_agents_cache');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed)) {
+            return parsed.filter(
+              (a) => (a.role || '').toLowerCase() === 'agent' && a.status !== 'Inactive'
+            );
           }
-        } catch {
-          // ignore
         }
-
-        // 2. Check localStorage cache
-        try {
-          const cached = localStorage.getItem('processhub_agents_cache');
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              return parsed;
-            }
-          }
-        } catch {
-          // ignore
-        }
-
-        return null;
+      } catch {
+        // ignore
       }
-
-      console.warn('fetchAgentsFromSupabase note:', error.message);
-      return null;
-    }
-
-    if (!data || data.length === 0) {
       return [];
     }
 
-    return data.map((row) => ({
-      id: row.id,
-      agentCode: row.agent_code,
-      name: row.name,
-      initial: row.initial || row.name.charAt(0).toUpperCase(),
-      colorClass: row.color_class || 'bg-gradient-to-tr from-indigo-500 to-purple-600 text-white',
-      team: row.team || 'Support Tier 1',
-      role: row.role || 'Customer Experience Specialist',
-      score: Number(row.score) || 85,
-      qualityScore: Number(row.quality_score) || Number(row.score) || 85,
-      fatalCount: Number(row.fatal_count) || 0,
-      callAuditCount: Number(row.call_audit_count) || 1,
-      pendingQuizzes: Number(row.pending_quizzes) || 0,
-      completedProcesses: Number(row.completed_processes) || 0,
-      rank: Number(row.rank) || 1,
-      status: (row.status as 'Active' | 'On Leave') || 'Active',
-      email: row.email || `${row.name.toLowerCase().replace(/\s+/g, '.')}@processhub.internal`,
-    }));
+    if (!profileRows || profileRows.length === 0) {
+      return [];
+    }
+
+    // 2. Filter strictly for real users whose profile role is "agent" and whose active status is true
+    const realAgentProfiles = profileRows.filter((p) => {
+      const role = (p.role || '').trim().toLowerCase();
+      if (role !== 'agent') return false;
+
+      // Active status must be true (filter out deactivated profiles)
+      const isActive =
+        p.is_active === true ||
+        p.is_active === 'true' ||
+        p.active === true ||
+        p.status === 'Active' ||
+        (p.is_active !== false && p.is_active !== 'false');
+
+      return isActive;
+    });
+
+    if (realAgentProfiles.length === 0) {
+      return [];
+    }
+
+    // Load any calibrated metrics / local persistent cache
+    let localCacheMap: Record<string, any> = {};
+    try {
+      const raw = localStorage.getItem('processhub_agents_cache');
+      if (raw) {
+        const list = JSON.parse(raw);
+        if (Array.isArray(list)) {
+          for (const item of list) {
+            if (item && item.id) {
+              localCacheMap[item.id] = item;
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // Also check if public.agents table exists to merge secondary fields if present
+    let agentsTableMap: Record<string, any> = {};
+    try {
+      const { data: agentRows, error: aErr } = await supabase.from('agents').select('*');
+      if (!aErr && agentRows && Array.isArray(agentRows)) {
+        for (const row of agentRows) {
+          if (row && row.id) {
+            agentsTableMap[row.id] = row;
+          }
+        }
+      }
+    } catch {
+      // agents table may not exist
+    }
+
+    const mappedAgents: Agent[] = realAgentProfiles.map((p, idx) => {
+      const cached = localCacheMap[p.id] || {};
+      const tableRow = agentsTableMap[p.id] || {};
+
+      // Load agent's current Quality Score, Fatal Count, and Call Audit Count
+      const qualityScore = Number(
+        p.quality_score ??
+        tableRow.quality_score ??
+        cached.qualityScore ??
+        p.score ??
+        tableRow.score ??
+        cached.score ??
+        85
+      );
+
+      const fatalCount = Number(
+        p.fatal_count ??
+        tableRow.fatal_count ??
+        cached.fatalCount ??
+        0
+      );
+
+      const callAuditCount = Number(
+        p.call_audit_count ??
+        tableRow.call_audit_count ??
+        cached.callAuditCount ??
+        1
+      );
+
+      const fullName = (p.full_name || cached.name || tableRow.name || 'Agent').trim();
+      const email =
+        p.email ||
+        cached.email ||
+        tableRow.email ||
+        `${fullName.toLowerCase().replace(/[^a-z0-9]/g, '.')}@processhub.internal`;
+      const team = p.team || cached.team || tableRow.team || 'Support Tier 1';
+      const role = p.role || cached.role || tableRow.role || 'QA Support Associate';
+
+      const initial = (fullName || 'A').charAt(0).toUpperCase();
+      const colors = [
+        'bg-gradient-to-tr from-indigo-500 to-purple-600 text-white',
+        'bg-gradient-to-tr from-blue-500 to-cyan-600 text-white',
+        'bg-gradient-to-tr from-emerald-500 to-teal-600 text-white',
+        'bg-gradient-to-tr from-amber-500 to-orange-600 text-white',
+        'bg-gradient-to-tr from-rose-500 to-pink-600 text-white',
+      ];
+      const colorClass = cached.colorClass || tableRow.color_class || colors[idx % colors.length];
+
+      return {
+        id: p.id,
+        agentCode: tableRow.agent_code || cached.agentCode || `AG-${1000 + idx}`,
+        name: fullName,
+        initial,
+        colorClass,
+        team,
+        role,
+        score: qualityScore,
+        qualityScore,
+        fatalCount,
+        callAuditCount,
+        pendingQuizzes: Number(tableRow.pending_quizzes ?? cached.pendingQuizzes ?? 0),
+        completedProcesses: Number(tableRow.completed_processes ?? cached.completedProcesses ?? 0),
+        rank: Number(tableRow.rank ?? cached.rank ?? (idx + 1)),
+        status: 'Active',
+        email,
+      };
+    });
+
+    // Update local cache for instant reload capability
+    try {
+      localStorage.setItem('processhub_agents_cache', JSON.stringify(mappedAgents));
+    } catch {
+      // ignore
+    }
+
+    return mappedAgents;
   } catch (err) {
     console.warn('fetchAgentsFromSupabase exception:', err);
-    return null;
+    return [];
   }
 }
 
 /**
  * Save or update an agent in Supabase.
- * If public.agents table does not exist, saves locally and updates profile if applicable.
+ * Persists changes directly to the existing Supabase profiles table,
+ * updates the public.agents table if available, and sends an audit notification.
  */
 export async function saveAgent(agent: Agent): Promise<boolean> {
-  // Always cache locally so agent edits and calibrations persist seamlessly
+  // Always update local cache so changes are instantly reflected across UI components
   try {
     const raw = localStorage.getItem('processhub_agents_cache');
     const list: Agent[] = raw ? JSON.parse(raw) : [];
@@ -1238,6 +1246,44 @@ export async function saveAgent(agent: Agent): Promise<boolean> {
     // ignore
   }
 
+  // 1. Persist updates to public.profiles table in Supabase
+  try {
+    const updates: Record<string, any> = {
+      quality_score: agent.qualityScore ?? agent.score,
+      score: agent.qualityScore ?? agent.score,
+      fatal_count: agent.fatalCount,
+      call_audit_count: agent.callAuditCount,
+    };
+    if (agent.email) updates.email = agent.email;
+    if (agent.name) updates.full_name = agent.name;
+    if (agent.team) updates.team = agent.team;
+
+    const { error: pErr } = await supabase
+      .from('profiles')
+      .update(updates)
+      .eq('id', agent.id);
+
+    if (pErr) {
+      // If quality_score column doesn't exist yet on profiles, fallback to score and name
+      if (pErr.message?.includes('column') && pErr.message?.includes('does not exist')) {
+        try {
+          await supabase
+            .from('profiles')
+            .update({
+              score: agent.qualityScore ?? agent.score,
+              full_name: agent.name,
+            })
+            .eq('id', agent.id);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('saveAgent profiles update note:', err);
+  }
+
+  // 2. Also upsert into public.agents if that table exists
   try {
     const row = {
       id: agent.id,
@@ -1258,39 +1304,27 @@ export async function saveAgent(agent: Agent): Promise<boolean> {
       status: agent.status,
       updated_at: new Date().toISOString(),
     };
-
-    const { error } = await supabase.from('agents').upsert(row, { onConflict: 'id' });
-    if (error) {
-      // Table agents not in schema cache (PGRST205)
-      if (
-        error.code === 'PGRST205' ||
-        error.message?.includes("Could not find the table 'public.agents'")
-      ) {
-        // Optional sync to profiles if UUID or profile exists
-        try {
-          await supabase.from('profiles').upsert(
-            {
-              id: agent.id,
-              full_name: agent.name,
-              team: agent.team,
-              role: 'agent',
-              email: agent.email,
-            },
-            { onConflict: 'id' }
-          );
-        } catch {
-          // ignore
-        }
-        return true;
-      }
-      console.warn('saveAgent note:', error.message);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.warn('saveAgent exception (cached locally):', err);
-    return true;
+    await supabase.from('agents').upsert(row, { onConflict: 'id' });
+  } catch {
+    // ignore
   }
+
+  // 3. Insert notification for the agent into Supabase notifications table
+  try {
+    await supabase.from('notifications').insert({
+      id: `notif-metric-${agent.id}-${Date.now()}`,
+      agent_id: agent.id,
+      title: 'Performance Score Calibrated',
+      message: `QA Administration calibrated your Quality Score to ${agent.qualityScore}%, Fatal Count: ${agent.fatalCount}, Evaluated Calls: ${agent.callAuditCount}.`,
+      type: 'performance',
+      read: false,
+      created_at: new Date().toISOString()
+    });
+  } catch {
+    // ignore
+  }
+
+  return true;
 }
 
 /**

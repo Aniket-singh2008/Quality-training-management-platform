@@ -78,11 +78,22 @@ export const QualityScoreLeaderboard: React.FC<QualityScoreLeaderboardProps> = (
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-xs sm:text-sm">
-              {sortedAgents.map((agent, index) => {
-                const rank = index + 1;
-                const score = agent.qualityScore ?? agent.score ?? 90;
-                const isCurrentAgent = currentAgentId === agent.id;
-                const isEditing = editingAgentId === agent.id;
+              {sortedAgents.length === 0 ? (
+                <tr>
+                  <td colSpan={isAdmin ? 4 : 3} className="py-12 text-center text-slate-400">
+                    <span className="material-symbols-outlined text-3xl mb-1 text-slate-300">verified</span>
+                    <p className="text-xs font-semibold text-slate-600">No agents found</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Quality scores will appear here as agents are added and calibrated.
+                    </p>
+                  </td>
+                </tr>
+              ) : (
+                sortedAgents.map((agent, index) => {
+                  const rank = index + 1;
+                  const score = agent.qualityScore ?? agent.score ?? 0;
+                  const isCurrentAgent = currentAgentId === agent.id;
+                  const isEditing = editingAgentId === agent.id;
 
                 return (
                   <tr
@@ -126,7 +137,7 @@ export const QualityScoreLeaderboard: React.FC<QualityScoreLeaderboardProps> = (
                             )}
                           </div>
                           <span className="text-[11px] text-slate-400 font-medium">
-                            {agent.team} • {agent.role}
+                            {agent.email ? `${agent.email} • ` : ''}{agent.team} • {agent.role}
                           </span>
                         </div>
                       </div>
@@ -215,7 +226,7 @@ export const QualityScoreLeaderboard: React.FC<QualityScoreLeaderboardProps> = (
                     )}
                   </tr>
                 );
-              })}
+              }))}
             </tbody>
           </table>
         </div>

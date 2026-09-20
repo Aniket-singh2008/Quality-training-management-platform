@@ -25,8 +25,19 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
 }) => {
   const [selectedScorecardSub, setSelectedScorecardSub] = useState<Submission | null>(null);
 
-  // Filter processes that are Published (available for agents)
-  const publishedProcesses = processes.filter((p) => p.status === 'Published');
+  // Filter processes that are Published AND assigned to THIS agent
+  const isAssignedToCurrentAgent = (p: AuditProcess) => {
+    if (p.status !== 'Published') return false;
+    // If audience type is 'all' or no audience specified, assigned to all active agents
+    if (!p.audience || p.audience.type === 'all') return true;
+    // If audience type is 'selected', only assigned if agent's ID is included
+    if (Array.isArray(p.audience.assignedAgents)) {
+      return p.audience.assignedAgents.includes(currentAgent.id);
+    }
+    return false;
+  };
+
+  const publishedProcesses = processes.filter(isAssignedToCurrentAgent);
 
   // AGENT PRIVACY: Only get THIS agent's submissions
   const mySubmissions = submissions.filter((s) => s.agentId === currentAgent.id);

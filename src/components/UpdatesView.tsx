@@ -139,7 +139,26 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({
 
       {/* Process Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {filteredProcesses.map((proc) => {
+        {filteredProcesses.length === 0 ? (
+          <div className="col-span-full py-16 text-center text-slate-400 bg-white rounded-3xl border border-dashed border-slate-200 p-8 shadow-xs">
+            <span className="material-symbols-outlined text-5xl mb-3 text-slate-300">menu_book</span>
+            <p className="text-base font-semibold text-slate-700">No process updates yet</p>
+            <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+              {searchQuery || selectedCategory !== 'All' || filter !== 'All'
+                ? 'No processes match your filter or search query.'
+                : 'Create and publish SOPs with quizzes to certify agents.'}
+            </p>
+            {userRole === 'admin' && (
+              <button
+                onClick={onNewAudit}
+                className="mt-4 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition-colors cursor-pointer"
+              >
+                + Create First Process
+              </button>
+            )}
+          </div>
+        ) : (
+          filteredProcesses.map((proc) => {
           const isCompleted = completedProcessIds.has(proc.id);
           const isDraft = proc.status === 'Draft';
           const rate = proc.metrics?.completionRate ?? 0;
@@ -264,7 +283,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({
               </div>
             </div>
           );
-        })}
+        }))}
       </div>
     </div>
   );

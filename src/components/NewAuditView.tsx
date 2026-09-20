@@ -1,5 +1,6 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { AuditProcess, Question, Option, Agent } from '../types';
+import { fetchAgentsFromSupabase } from '../services/supabaseService';
 
 interface NewAuditViewProps {
   initialProcess?: AuditProcess;
@@ -39,18 +40,18 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
 
   // Content state
   const [sectionTitle, setSectionTitle] = useState(
-    initialProcess?.content.sectionTitle || 'Incident Classification Criteria'
+    initialProcess?.content?.sectionTitle || 'Incident Classification Criteria'
   );
   const [bodyText, setBodyText] = useState(
-    initialProcess?.content.bodyText ||
+    initialProcess?.content?.bodyText ||
       'When a customer reports payment discrepancy > $500, immediately flag the ticket under Severity-1 and trigger the direct tier-2 routing chain.'
   );
   const [complianceNotice, setComplianceNotice] = useState(
-    initialProcess?.content.complianceCallout ||
+    initialProcess?.content?.complianceCallout ||
       'Mandatory Compliance: Ensure all customer identifiers are masked prior to initiating third-party audit verification.'
   );
   const [attachment, setAttachment] = useState<{ name: string; size: string } | null>(
-    initialProcess?.content.attachmentName
+    initialProcess?.content?.attachmentName
       ? {
           name: initialProcess.content.attachmentName,
           size: initialProcess.content.attachmentSize || '1.4 MB'
@@ -63,7 +64,7 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
 
   // Quiz state
   const [questions, setQuestions] = useState<Question[]>(
-    initialProcess?.quiz.questions || [
+    initialProcess?.quiz?.questions || [
       {
         id: 'q-1',
         text: 'What is the mandatory SLA response time for a Severity-1 payment escalation?',
@@ -91,50 +92,122 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
   );
 
   // Audience state
+  const [agentsList, setAgentsList] = useState<Agent[]>(allAgents);
+  const [isLoadingAgents, setIsLoadingAgents] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (allAgents && allAgents.length > 0) {
+      setAgentsList(allAgents);
+    } else {
+      setIsLoadingAgents(true);
+      fetchAgentsFromSupabase().then((loaded) => {
+        setIsLoadingAgents(false);
+        if (loaded && loaded.length > 0) {
+          setAgentsList(loaded);
+        }
+      });
+    }
+  }, [allAgents]);
+
+  const activeAgents = agentsList.filter(
+    (a) => a.status !== 'Inactive' && (a.role || '').toLowerCase() === 'agent'
+  );
+
   const [audienceScope, setAudienceScope] = useState<'all' | 'selected'>(
-    initialProcess?.audience.type || 'selected'
+    initialProcess?.audience?.type || 'all'
   );
   const [selectedTeams, setSelectedTeams] = useState<string[]>(
-    initialProcess?.audience.selectedTeams || ['Escalations Squad']
+    initialProcess?.audience?.selectedTeams || ['Escalations Squad']
   );
   const [assignedAgentIds, setAssignedAgentIds] = useState<string[]>(
-    initialProcess?.audience.assignedAgents || ['ag-1', 'ag-2', 'ag-3', 'ag-4', 'ag-5', 'ag-6', 'ag-7', 'ag-8']
+    initialProcess?.audience?.assignedAgents || []
   );
+
+  useEffect(() => {
+    if (activeAgents.length > 0) {
+      if (initialProcess?.audience?.assignedAgents && initialProcess.audience.assignedAgents.length > 0) {
+        setAssignedAgentIds(initialProcess.audience.assignedAgents);
+      } else if (assignedAgentIds.length === 0) {
+        setAssignedAgentIds(activeAgents.map((a) => a.id));
+      }
+    }
+  }, [activeAgents.length, initialProcess]);
+
+  const isAllSelected = activeAgents.length > 0 && assignedAgentIds.length === activeAgents.length;
+
+  const toggleSelectAll = () => {
+    if (isAllSelected) {
+      setAssignedAgentIds([]);
+      setAudienceScope('selected');
+    } else {
+      const allIds = activeAgents.map((a) => a.id);
+      setAssignedAgentIds(allIds);
+      setAudienceScope('all');
+    }
+  };
+
+  const toggleAgentAssigned = (agentId: string) => {
+    let next: string[];
+    if (assignedAgentIds.includes(agentId)) {
+      next = assignedAgentIds.filter((id) => id !== agentId);
+    } else {
+      next = [...assignedAgentIds, agentId];
+    }
+    setAssignedAgentIds(next);
+    if (next.length === activeAgents.length && activeAgents.length > 0) {
+      setAudienceScope('all');
+    } else {
+      setAudienceScope('selected');
+    }
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Helpers
   const totalMarks = questions.reduce((sum, q) => sum + (Number(q.points) || 0), 0);
 
-  const buildCurrentProcess = (status: 'Published' | 'Draft'): AuditProcess => ({
-    id: initialProcess?.id || `proc-${Date.now()}`,
-    draftNumber,
-    title,
-    shortDescription,
-    category,
-    effectiveDate,
-    priority,
-    status,
-    autoSavedText: 'Saved just now',
-    content: {
-      sectionTitle,
-      bodyText,
-      complianceCallout: complianceNotice,
-      attachmentName: attachment?.name,
-      attachmentSize: attachment?.size
-    },
-    quiz: {
-      totalQuestions: questions.length,
-      totalMarks,
-      questions
-    },
-    audience: {
-      type: audienceScope,
-      selectedTeams,
-      assignedAgents: assignedAgentIds,
-      totalActive: 24
-    }
-  });
+  const buildCurrentProcess = (status: 'Published' | 'Draft'): AuditProcess => {
+    const effectiveAssigned =
+      audienceScope === 'all'
+        ? activeAgents.map((a) => a.id)
+        : assignedAgentIds;
+
+    return {
+      id: initialProcess?.id || `proc-${Date.now()}`,
+      draftNumber,
+      title,
+      shortDescription,
+      category,
+      effectiveDate,
+      priority,
+      status,
+      autoSavedText: 'Saved just now',
+      content: {
+        sectionTitle,
+        bodyText,
+        complianceCallout: complianceNotice,
+        attachmentName: attachment?.name,
+        attachmentSize: attachment?.size
+      },
+      quiz: {
+        totalQuestions: questions.length,
+        totalMarks,
+        questions
+      },
+      audience: {
+        type: audienceScope,
+        selectedTeams,
+        assignedAgents: effectiveAssigned,
+        totalActive: activeAgents.length
+      },
+      metrics: {
+        completionRate: initialProcess?.metrics?.completionRate || 0,
+        completedCount: initialProcess?.metrics?.completedCount || 0,
+        totalAssigned: effectiveAssigned.length,
+        publishedDate: initialProcess?.metrics?.publishedDate || (status === 'Published' ? 'Today' : undefined)
+      }
+    };
+  };
 
   const handleDraftClick = () => {
     const updated = buildCurrentProcess('Draft');
@@ -143,6 +216,10 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
   };
 
   const handlePublishClick = () => {
+    if (assignedAgentIds.length === 0) {
+      alert('Please select at least one agent to receive this Process Update & Quiz.');
+      return;
+    }
     const updated = buildCurrentProcess('Published');
     onPublish(updated);
   };
@@ -244,20 +321,12 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
     }
   };
 
-  const toggleAgentAssigned = (agentId: string) => {
-    if (assignedAgentIds.includes(agentId)) {
-      setAssignedAgentIds(assignedAgentIds.filter((id) => id !== agentId));
-    } else {
-      setAssignedAgentIds([...assignedAgentIds, agentId]);
-    }
-  };
-
   const steps = [
     { num: 1, label: 'Information', icon: 'info' },
     { num: 2, label: 'Instructions', icon: 'menu_book' },
     { num: 3, label: 'Attachments', icon: 'attach_file' },
     { num: 4, label: 'Quiz & Marks', icon: 'quiz' },
-    { num: 5, label: 'Audience & Publish', icon: 'groups' }
+    { num: 5, label: 'Send To Agents', icon: 'groups' }
   ];
 
   return (
@@ -820,125 +889,188 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
               onClick={() => setActiveStep(5)}
               className="px-5 py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-xs sm:text-sm flex items-center gap-1.5 hover:bg-indigo-700 transition-colors shadow-md shadow-indigo-500/20"
             >
-              <span>Next: Audience &amp; Publish</span>
+              <span>Next: Send To Agents</span>
               <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
             </button>
           </div>
         </div>
       )}
 
-      {/* STEP 5: AUDIENCE & PUBLISH */}
+      {/* STEP 5: SEND TO AGENTS & PUBLISH */}
       {activeStep === 5 && (
         <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-sm space-y-6">
           <div className="border-b border-slate-100 pb-4">
             <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-indigo-600" />
-              5. Target Audience &amp; Rollout Review
+              5. Send To Agents &amp; Rollout Review
             </h2>
             <p className="text-xs text-slate-500 mt-1">
-              Select which squads or specific agents must take this certification audit.
+              Select which active agents from Supabase will receive this Process Update and must complete the certification quiz.
             </p>
           </div>
 
+          {/* Section: Send To Agents */}
           <div className="space-y-5">
-            {/* Scope Toggle */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div
-                onClick={() => setAudienceScope('all')}
-                className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center gap-3 ${
-                  audienceScope === 'all'
-                    ? 'border-indigo-600 bg-indigo-50/50 shadow-xs'
-                    : 'border-slate-200 hover:border-slate-300 bg-white'
-                }`}
-              >
-                <div
-                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                    audienceScope === 'all'
-                      ? 'border-indigo-600 bg-indigo-600 text-white'
-                      : 'border-slate-300'
-                  }`}
-                >
-                  {audienceScope === 'all' && <span className="w-2 h-2 rounded-full bg-white" />}
-                </div>
+            <div className="p-5 rounded-2xl bg-slate-50/80 border border-slate-200/80 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200/60 pb-3.5">
                 <div>
-                  <p className="text-xs font-bold text-slate-900">All Active Agents (24 Total)</p>
-                  <p className="text-[11px] text-slate-500">Rolls out to the entire company roster</p>
+                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[18px] text-indigo-600">group_add</span>
+                    Send To Agents
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Choose individual agents, multiple agents, or select all active agents.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-indigo-100 text-indigo-800">
+                    {assignedAgentIds.length} of {activeAgents.length} Agents Selected
+                  </span>
                 </div>
               </div>
 
+              {/* Master "Select All Agents" Checkbox */}
               <div
-                onClick={() => setAudienceScope('selected')}
-                className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center gap-3 ${
-                  audienceScope === 'selected'
-                    ? 'border-indigo-600 bg-indigo-50/50 shadow-xs'
-                    : 'border-slate-200 hover:border-slate-300 bg-white'
+                onClick={toggleSelectAll}
+                className={`p-3.5 rounded-xl border-2 transition-all cursor-pointer flex items-center justify-between ${
+                  isAllSelected
+                    ? 'border-indigo-600 bg-indigo-50/70 text-indigo-950 shadow-xs'
+                    : 'border-slate-200 hover:border-slate-300 bg-white text-slate-700'
                 }`}
               >
-                <div
-                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                    audienceScope === 'selected'
-                      ? 'border-indigo-600 bg-indigo-600 text-white'
-                      : 'border-slate-300'
-                  }`}
-                >
-                  {audienceScope === 'selected' && (
-                    <span className="w-2 h-2 rounded-full bg-white" />
-                  )}
+                <div className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    id="select-all-agents-checkbox"
+                    checked={isAllSelected}
+                    onChange={() => {}} // Handled by container onClick
+                    className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer accent-indigo-600"
+                  />
+                  <div>
+                    <label htmlFor="select-all-agents-checkbox" className="text-xs font-bold cursor-pointer block text-slate-900">
+                      Select All Agents ({activeAgents.length} Total Active)
+                    </label>
+                    <span className="text-[11px] text-slate-500">
+                      Assign this Process Update &amp; Quiz to every active agent loaded from Supabase
+                    </span>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs font-bold text-slate-900">Custom Squad Selection</p>
-                  <p className="text-[11px] text-slate-500">Target specific squads or specialists</p>
-                </div>
+
+                <span className="text-xs font-semibold text-indigo-600 hidden sm:inline">
+                  {isAllSelected ? 'Deselect All' : 'Select All'}
+                </span>
               </div>
-            </div>
 
-            {/* Squads & Agent Selection Chips */}
-            {audienceScope === 'selected' && (
-              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
-                <span className="text-xs font-bold text-slate-700 block">Assigned Agents Roster</span>
+              {/* Loading State */}
+              {isLoadingAgents && (
+                <div className="py-6 text-center text-slate-500 text-xs bg-white rounded-xl border border-slate-200">
+                  <span className="material-symbols-outlined animate-spin text-xl text-indigo-600 mb-1">sync</span>
+                  <p>Loading active agents from Supabase...</p>
+                </div>
+              )}
 
-                <div className="flex flex-wrap gap-2">
-                  {allAgents.map((agent) => {
-                    const isSelected = assignedAgentIds.includes(agent.id);
+              {/* Empty State */}
+              {!isLoadingAgents && activeAgents.length === 0 && (
+                <div className="py-8 text-center text-slate-500 text-xs bg-white rounded-xl border border-dashed border-slate-200">
+                  <span className="material-symbols-outlined text-2xl text-slate-400 mb-1">person_off</span>
+                  <p className="font-semibold text-slate-700">No active agents found in Supabase</p>
+                  <p className="text-slate-400 mt-0.5">Please create agents in the Agents tab first.</p>
+                </div>
+              )}
+
+              {/* Agent Roster with Checkboxes, Full Name, and Email */}
+              {!isLoadingAgents && activeAgents.length > 0 && (
+                <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
+                  {activeAgents.map((agent) => {
+                    const isChecked = assignedAgentIds.includes(agent.id);
                     return (
-                      <button
+                      <div
                         key={agent.id}
-                        type="button"
                         onClick={() => toggleAgentAssigned(agent.id)}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 border transition-all cursor-pointer ${
-                          isSelected
-                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
-                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                        className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                          isChecked
+                            ? 'border-indigo-500/80 bg-indigo-50/40 shadow-xs'
+                            : 'border-slate-200/80 hover:border-slate-300 bg-white'
                         }`}
                       >
-                        <span
-                          className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center ${
-                            isSelected ? 'bg-white text-indigo-700' : 'bg-slate-200 text-slate-700'
-                          }`}
-                        >
-                          {agent.initial}
-                        </span>
-                        <span>{agent.name}</span>
-                        {isSelected && <span className="text-[10px]">✓</span>}
-                      </button>
+                        <div className="flex items-center gap-3 min-w-0">
+                          <input
+                            type="checkbox"
+                            id={`agent-check-${agent.id}`}
+                            checked={isChecked}
+                            onChange={() => {}} // Handled by container onClick
+                            className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer accent-indigo-600 shrink-0"
+                          />
+
+                          <div
+                            className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
+                              agent.colorClass || 'bg-indigo-600 text-white'
+                            }`}
+                          >
+                            {agent.initial || agent.name.charAt(0).toUpperCase()}
+                          </div>
+
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-slate-900 truncate">
+                                {agent.name}
+                              </span>
+                              {agent.team && (
+                                <span className="text-[10px] font-medium px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 truncate hidden sm:inline">
+                                  {agent.team}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-500 truncate font-mono">
+                              {agent.email}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="shrink-0 flex items-center gap-2">
+                          <span
+                            className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
+                              isChecked
+                                ? 'bg-indigo-100 text-indigo-700'
+                                : 'bg-slate-100 text-slate-500'
+                            }`}
+                          >
+                            {isChecked ? 'Assigned ✓' : 'Unassigned'}
+                          </span>
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
+              )}
+            </div>
+
+            {/* Validation Notice if 0 selected */}
+            {assignedAgentIds.length === 0 && (
+              <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2">
+                <span className="material-symbols-outlined text-[18px] text-amber-600">warning</span>
+                <span className="font-medium">
+                  Please select at least one agent to receive this Process Update &amp; Quiz before publishing.
+                </span>
               </div>
             )}
 
-            {/* Final Summary Card before Publish */}
+            {/* Rollout Summary */}
             <div className="p-5 rounded-2xl bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 border border-indigo-100 space-y-2">
               <h3 className="text-xs font-bold uppercase tracking-wider text-indigo-800">
-                Ready for Rollout
+                Rollout Summary
               </h3>
-              <p className="text-xs text-slate-600">
-                This will deploy <strong>{title}</strong> with{' '}
-                <strong>{questions.length} questions ({totalMarks} marks)</strong> to{' '}
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Publishing <strong>"{title}"</strong> with{' '}
                 <strong>
-                  {audienceScope === 'all' ? 'all 24 agents' : `${assignedAgentIds.length} agents`}
+                  {questions.length} question{questions.length === 1 ? '' : 's'} ({totalMarks} marks)
+                </strong>{' '}
+                targeted to{' '}
+                <strong className="text-indigo-700">
+                  {assignedAgentIds.length} of {activeAgents.length} agent{assignedAgentIds.length === 1 ? '' : 's'}
                 </strong>
-                . Automatic compliance notifications will be queued immediately.
+                . Only the selected agents will receive compliance notifications and be able to view and complete this assessment.
               </p>
             </div>
           </div>
@@ -946,7 +1078,7 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
           <div className="flex justify-between pt-4 border-t border-slate-100">
             <button
               onClick={() => setActiveStep(4)}
-              className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs sm:text-sm"
+              className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs sm:text-sm cursor-pointer"
             >
               Back
             </button>
@@ -959,11 +1091,16 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
               </button>
               <button
                 onClick={handlePublishClick}
-                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold text-xs sm:text-sm flex items-center gap-2 shadow-lg shadow-emerald-600/20 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer"
+                disabled={assignedAgentIds.length === 0}
+                className={`px-6 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 transition-all ${
+                  assignedAgentIds.length === 0
+                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                    : 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-lg shadow-emerald-600/20 hover:scale-[1.02] active:scale-[0.98] cursor-pointer'
+                }`}
               >
                 <span className="material-symbols-outlined text-[20px]">send</span>
                 <span>
-                  Publish ({audienceScope === 'all' ? 24 : assignedAgentIds.length} Agents)
+                  Publish ({assignedAgentIds.length} Agent{assignedAgentIds.length === 1 ? '' : 's'})
                 </span>
               </button>
             </div>

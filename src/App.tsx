@@ -33,20 +33,12 @@ import {
   deleteProcessFromSupabase,
   saveAgent,
   saveSubmissionToSupabase,
-  seedInitialDataIfEmpty,
   getCurrentSessionAndProfile,
   signOutUser,
   toggleAgentActiveStatus,
   SupabaseHealthStatus
 } from './services/supabaseService';
-import {
-  INITIAL_PROCESSES,
-  INITIAL_AGENTS,
-  INITIAL_ACTIVITIES,
-  INITIAL_NOTIFICATIONS,
-  INITIAL_SUBMISSIONS,
-  INITIAL_SETTINGS
-} from './data/initialData';
+import { INITIAL_SETTINGS } from './data/initialData';
 import {
   AuditProcess,
   Agent,
@@ -65,11 +57,11 @@ export default function App() {
   const [userRole, setUserRole] = useState<'admin' | 'agent'>('admin');
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const [processes, setProcesses] = useState<AuditProcess[]>(INITIAL_PROCESSES);
-  const [agents, setAgents] = useState<Agent[]>(INITIAL_AGENTS);
-  const [activities, setActivities] = useState<ActivityItem[]>(INITIAL_ACTIVITIES);
-  const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
-  const [submissions, setSubmissions] = useState<Submission[]>(INITIAL_SUBMISSIONS);
+  const [processes, setProcesses] = useState<AuditProcess[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [activities, setActivities] = useState<ActivityItem[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [settings, setSettings] = useState<SystemSettings>(INITIAL_SETTINGS);
 
   // Supabase connection & sync state
@@ -91,7 +83,19 @@ export default function App() {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' } | null>(null);
 
-  const currentAgent = agents.find((a) => a.id === currentAgentId) || agents[0];
+  const currentAgent =
+    agents.find((a) => a.id === currentAgentId) ||
+    agents[0] ||
+    (currentProfile
+      ? ({
+          id: currentProfile.id,
+          name: currentProfile.fullName || 'Agent',
+          email: currentProfile.email,
+          initial: (currentProfile.fullName || 'A').charAt(0).toUpperCase(),
+          colorClass: 'bg-indigo-600',
+          team: 'Voice Support'
+        } as Agent)
+      : undefined);
 
   const showToast = (message: string, type: 'success' | 'info' = 'success') => {
     setToast({ message, type });
@@ -108,32 +112,21 @@ export default function App() {
       setSupabaseStatus(health);
 
       if (health.tablesExist) {
-        // Auto-seed if tables exist but are empty
-        await seedInitialDataIfEmpty();
-
         // Fetch processes (with questions)
         const fetchedProcs = await fetchProcessesFromSupabase();
-        if (fetchedProcs && fetchedProcs.length > 0) {
-          setProcesses(fetchedProcs);
-        }
+        setProcesses(fetchedProcs || []);
 
         // Fetch agents
         const fetchedAgents = await fetchAgentsFromSupabase();
-        if (fetchedAgents && fetchedAgents.length > 0) {
-          setAgents(fetchedAgents);
-        }
+        setAgents(fetchedAgents || []);
 
         // Fetch submissions & scores
         const fetchedSubs = await fetchSubmissionsFromSupabase();
-        if (fetchedSubs && fetchedSubs.length > 0) {
-          setSubmissions(fetchedSubs);
-        }
+        setSubmissions(fetchedSubs || []);
 
         // Fetch notifications for agents and admins
         const fetchedNotifs = await fetchNotificationsFromSupabase();
-        if (fetchedNotifs && fetchedNotifs.length > 0) {
-          setNotifications(fetchedNotifs);
-        }
+        setNotifications(fetchedNotifs || []);
       }
     } catch (err) {
       console.error('Supabase synchronization error:', err);
@@ -267,7 +260,7 @@ export default function App() {
       setCurrentTab('dashboard');
     }
     showToast(
-      `Switched to ${nextRole === 'admin' ? 'Admin Dashboard' : `Agent View (${currentAgent.name})`}`,
+      `Switched to ${nextRole === 'admin' ? 'Admin Dashboard' : `Agent View (${currentAgent?.name || 'Agent'})`}`,
       'info'
     );
   };
@@ -404,6 +397,12 @@ export default function App() {
     agentId: string,
     updates: { qualityScore: number; fatalCount: number; callAuditCount: number }
   ) => {
+    // Requirement 9: Agents must NOT be able to modify their own scores
+    if (userRole !== 'admin') {
+      showToast('Permission denied: Agents cannot modify quality scores.', 'info');
+      return;
+    }
+
     const target = agents.find((a) => a.id === agentId);
     const updatedAgent: Agent | null = target
       ? { ...target, ...updates, score: updates.qualityScore, qualityScore: updates.qualityScore }
@@ -414,7 +413,7 @@ export default function App() {
     );
 
     if (updatedAgent) {
-      saveAgent(updatedAgent);
+      await saveAgent(updatedAgent);
     }
 
     showToast(
@@ -423,8 +422,14 @@ export default function App() {
   };
 
   const handleUpdateAgent = async (updatedAgent: Agent) => {
+    // Requirement 9: Agents must NOT be able to modify their own scores
+    if (userRole !== 'admin') {
+      showToast('Permission denied: Agents cannot modify quality scores.', 'info');
+      return;
+    }
+
     setAgents((prev) => prev.map((a) => (a.id === updatedAgent.id ? updatedAgent : a)));
-    saveAgent(updatedAgent);
+    await saveAgent(updatedAgent);
     showToast(
       `Saved: ${updatedAgent.name} (Quality: ${updatedAgent.qualityScore}%, Fatals: ${updatedAgent.fatalCount}, Audits: ${updatedAgent.callAuditCount})`
     );
@@ -589,7 +594,9 @@ export default function App() {
 
   // Set of completed processes by current logged in agent
   const agentCompletedProcessIds = new Set(
-    submissions.filter((s) => s.agentId === currentAgent.id).map((s) => s.processId)
+    currentAgent
+      ? submissions.filter((s) => s.agentId === currentAgent.id).map((s) => s.processId)
+      : []
   );
 
   // AUTH GUARD: Display spinner while verifying existing Supabase session
@@ -610,6 +617,39 @@ export default function App() {
         onLoginSuccess={(profile) => {
           setCurrentProfile(profile);
           setUserRole(profile.role);
+          if (profile.role === 'agent') {
+            setCurrentTab('dashboard');
+            setAgents((currAgents) => {
+              const matched = currAgents.find(
+                (a) => a.id === profile.id || a.email?.toLowerCase() === profile.email?.toLowerCase()
+              );
+              if (matched) {
+                setCurrentAgentId(matched.id);
+                return currAgents;
+              }
+              const initial = profile.fullName.trim().charAt(0).toUpperCase() || 'A';
+              const createdAgent: Agent = {
+                id: profile.id,
+                agentCode: `AG-${profile.id.slice(0, 4).toUpperCase()}`,
+                name: profile.fullName,
+                initial,
+                colorClass: 'bg-gradient-to-tr from-indigo-500 to-purple-600 text-white',
+                team: 'Escalations Squad',
+                role: 'QA Support Associate',
+                score: 90,
+                qualityScore: 90,
+                fatalCount: 0,
+                callAuditCount: 15,
+                pendingQuizzes: 1,
+                completedProcesses: 1,
+                rank: 9,
+                status: 'Active',
+                email: profile.email,
+              };
+              setCurrentAgentId(profile.id);
+              return [createdAgent, ...currAgents];
+            });
+          }
           loadDataFromSupabase();
           showToast(
             `Authenticated as ${profile.fullName} (${profile.role === 'admin' ? 'Primary Admin' : 'Agent'})`
@@ -751,12 +791,12 @@ export default function App() {
           {currentTab === 'process-detail' && (
             <ProcessDetailView
               process={selectedProcessDetail || processes[0]}
-              currentAgent={currentAgent}
+              currentAgent={currentAgent || ({} as Agent)}
               userRole={userRole}
               existingSubmission={submissions.find(
                 (s) =>
-                  s.processId === (selectedProcessDetail?.id || processes[0].id) &&
-                  s.agentId === currentAgent.id
+                  s.processId === (selectedProcessDetail?.id || processes[0]?.id) &&
+                  s.agentId === currentAgent?.id
               )}
               onBack={() => handleTabChange('updates')}
               onSubmitQuiz={handleQuizSubmission}
@@ -766,7 +806,7 @@ export default function App() {
           {/* CREATE PROCESS TAB (Admin only) */}
           {currentTab === 'new-audit' && (
             <NewAuditView
-              initialProcess={editingProcess || processes[0]}
+              initialProcess={editingProcess || processes[0] || undefined}
               allAgents={agents}
               onSaveDraft={handleSaveDraft}
               onPublish={handlePublish}
@@ -793,7 +833,7 @@ export default function App() {
               submissions={submissions}
               processes={processes}
               userRole={userRole}
-              currentAgentId={currentAgent.id}
+              currentAgentId={currentAgent?.id}
               onReviewSubmission={handleOpenProcessDetail}
             />
           )}
@@ -804,7 +844,7 @@ export default function App() {
               agents={agents}
               submissions={submissions}
               processes={processes}
-              currentAgentId={userRole === 'agent' ? currentAgent.id : undefined}
+              currentAgentId={userRole === 'agent' ? currentAgent?.id : undefined}
               isAdmin={userRole === 'admin'}
               onUpdateAgentPerformance={handleUpdateAgentPerformance}
               onRemindAgent={handleRemindAgent}
@@ -825,9 +865,9 @@ export default function App() {
       {activeQuizProcess && (
         <QuizPreviewModal
           process={activeQuizProcess}
-          currentAgent={currentAgent}
+          currentAgent={currentAgent || ({} as Agent)}
           existingSubmission={submissions.find(
-            (s) => s.processId === activeQuizProcess.id && s.agentId === currentAgent.id
+            (s) => s.processId === activeQuizProcess.id && s.agentId === currentAgent?.id
           )}
           onClose={() => setActiveQuizProcess(null)}
           onQuizCompleted={(percentage, earned, total, details) => {

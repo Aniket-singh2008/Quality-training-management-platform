@@ -3,9 +3,7 @@ import { Agent, PerformanceImportRow, ImportSummary } from '../types';
 import {
   extractTextFromPdf,
   parsePerformanceText,
-  validateAndMatchPerformanceRows,
-  generateSamplePdfBlob,
-  SAMPLE_PERFORMANCE_REPORT_TEXT
+  validateAndMatchPerformanceRows
 } from '../utils/pdfPerformanceService';
 
 interface ImportPerformanceModalProps {
@@ -113,24 +111,6 @@ export const ImportPerformanceModal: React.FC<ImportPerformanceModalProps> = ({
     } finally {
       setIsProcessing(false);
     }
-  };
-
-  // Quick Demo / Sample Report Loader
-  const handleLoadSampleData = () => {
-    handleProcessPdf(undefined, SAMPLE_PERFORMANCE_REPORT_TEXT);
-  };
-
-  // Download Sample PDF for Admin testing
-  const handleDownloadSamplePdf = () => {
-    const blob = generateSamplePdfBlob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'Agent_Performance_Report_Sample.pdf';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   };
 
   // STEP 2 -> STEP 3: Confirm Import
@@ -345,25 +325,9 @@ export const ImportPerformanceModal: React.FC<ImportPerformanceModalProps> = ({
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleDownloadSamplePdf}
-                      className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer"
-                    >
-                      <span className="material-symbols-outlined text-[16px]">download</span>
-                      <span>Download Sample PDF</span>
-                    </button>
-                    <span className="text-slate-300">•</span>
-                    <button
-                      type="button"
-                      onClick={handleLoadSampleData}
-                      className="text-xs font-bold text-purple-600 hover:text-purple-800 flex items-center gap-1 cursor-pointer"
-                    >
-                      <span className="material-symbols-outlined text-[16px]">play_circle</span>
-                      <span>Load Sample Demo Data</span>
-                    </button>
-                  </div>
+                  <span className="text-[11px] text-slate-400 font-medium">
+                    Text-based PDF reports with structured columns
+                  </span>
                 </div>
 
                 <div className="overflow-x-auto">
@@ -379,18 +343,11 @@ export const ImportPerformanceModal: React.FC<ImportPerformanceModalProps> = ({
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-slate-700">
                       <tr>
-                        <td className="py-2 px-3 font-bold text-indigo-700">AGT001</td>
-                        <td className="py-2 px-3">Rahul Mehta</td>
-                        <td className="py-2 px-3">94%</td>
-                        <td className="py-2 px-3">1</td>
-                        <td className="py-2 px-3">12</td>
-                      </tr>
-                      <tr>
-                        <td className="py-2 px-3 font-bold text-indigo-700">AGT002</td>
-                        <td className="py-2 px-3">Priya Patel</td>
-                        <td className="py-2 px-3">89%</td>
-                        <td className="py-2 px-3">2</td>
-                        <td className="py-2 px-3">10</td>
+                        <td className="py-2 px-3 font-bold text-indigo-700">AGT-####</td>
+                        <td className="py-2 px-3">Full Name</td>
+                        <td className="py-2 px-3">0-100%</td>
+                        <td className="py-2 px-3">0+</td>
+                        <td className="py-2 px-3">0+</td>
                       </tr>
                     </tbody>
                   </table>

@@ -3,9 +3,7 @@ import { Agent, PerformanceImportRow, ImportSummary } from '../types';
 import {
   extractTextFromPdf,
   parsePerformanceText,
-  validateAndMatchPerformanceRows,
-  generateSamplePdfBlob,
-  SAMPLE_PERFORMANCE_REPORT_TEXT
+  validateAndMatchPerformanceRows
 } from '../utils/pdfPerformanceService';
 
 interface ImportPerformanceCardProps {
@@ -99,18 +97,6 @@ export const ImportPerformanceCard: React.FC<ImportPerformanceCardProps> = ({
     setSummary(null);
   };
 
-  const handleDownloadSample = () => {
-    const blob = generateSamplePdfBlob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'Agent_Performance_Report_Sample.pdf';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   const filteredRows = importRows.filter((r) => {
     if (filterTab === 'ready') return r.status === 'Ready to Update';
     if (filterTab === 'issues') return r.status !== 'Ready to Update';
@@ -146,15 +132,6 @@ export const ImportPerformanceCard: React.FC<ImportPerformanceCardProps> = ({
         </div>
 
         <div className="flex items-center gap-2 self-start sm:self-auto">
-          <button
-            type="button"
-            onClick={handleDownloadSample}
-            className="px-3 py-1.5 rounded-xl border border-slate-200 hover:border-slate-300 text-slate-600 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-          >
-            <span className="material-symbols-outlined text-[16px] text-indigo-600">download</span>
-            <span>Sample PDF</span>
-          </button>
-
           {onOpenFullModal && (
             <button
               type="button"
@@ -278,18 +255,6 @@ export const ImportPerformanceCard: React.FC<ImportPerformanceCardProps> = ({
                       <span>Preview Import</span>
                     </>
                   )}
-                </button>
-              )}
-
-              {/* Quick sample load shortcut */}
-              {!selectedFile && (
-                <button
-                  type="button"
-                  onClick={() => handleProcess(undefined, SAMPLE_PERFORMANCE_REPORT_TEXT)}
-                  className="px-3.5 py-2 rounded-xl bg-purple-50 text-purple-700 border border-purple-200 text-xs font-bold hover:bg-purple-100 transition-colors flex items-center gap-1 cursor-pointer"
-                >
-                  <span className="material-symbols-outlined text-[16px]">play_circle</span>
-                  <span>Try Sample Data</span>
                 </button>
               )}
             </div>
